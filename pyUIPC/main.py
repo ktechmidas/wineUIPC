@@ -252,7 +252,7 @@ def metres_to_fs_ground_alt(metres: float) -> Tuple[int, int]:
 
 
 def update_snapshot() -> None:
-    global _prev_xpdr_code, _prev_xpdr_mode, _last_on_ground, _landing_rate_raw
+    global _prev_xpdr_code, _prev_xpdr_mode, _last_on_ground, _landing_rate_raw, _landing_rate_frozen
     # Handshake Offsets
     _write_u32(0x3304, 0x19980005)
     _write_u16(0x3308, 10)
@@ -274,8 +274,8 @@ def update_snapshot() -> None:
     if ias_kts <= 0.0:
         ias_mps_fallback = read_float("sim/flightmodel/position/indicated_airspeed")
         ias_kts = max(0.0, ias_mps_fallback * 1.943844)
-    vs_mps = read_float("sim/flightmodel/position/vh_ind_fpm") / 196.850394  # convert ft/min to m/s for 0x02C8
-    vs_fpm = vs_mps * 196.850394
+    vs_fpm = read_float("sim/flightmodel/position/vh_ind_fpm")
+    vs_mps = vs_fpm * 0.00508
     on_ground_any = read_int("sim/flightmodel2/gear/on_ground")
     on_ground_main = read_int("sim/flightmodel/parts/on_ground_main")
     on_ground = 1 if (on_ground_any or on_ground_main) else 0
@@ -302,9 +302,11 @@ def update_snapshot() -> None:
     _write_u32(0x02C8, encode_vs_mps256(vs_mps))
 
     if on_ground == 0:
+        _landing_rate_frozen = False
         _landing_rate_raw = int(vs_mps * 256.0)
-    elif _last_on_ground == 0 and on_ground == 1:
+    elif not _landing_rate_frozen and y_agl < 2.0:
         _landing_rate_raw = int(vs_mps * 256.0)
+        _landing_rate_frozen = True
         log(f"Landing rate captured: {_landing_rate_raw / 256.0 * 60 * 3.28084:.2f} fpm")
     _write_s32(0x030C, _landing_rate_raw)
     _write_u8(0x0366, on_ground)
@@ -685,6 +687,7 @@ _prev_xpdr_code: Optional[int] = None
 _prev_xpdr_mode: Optional[int] = None
 _last_on_ground = 0
 _landing_rate_raw = 0
+_landing_rate_frozen = False
 
 
 def XPluginStart():
