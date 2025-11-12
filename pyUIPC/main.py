@@ -25,7 +25,7 @@ from typing import Any, Dict, Optional, Tuple, Callable, List
 
 import xp  # bereitgestellt durch XPPython3
 
-LOG_LEVEL = 1
+LOG_LEVEL = 2
 try:
     with open("pyUIPC.cfg", "r") as cfg:
         for line in cfg:
@@ -36,10 +36,15 @@ try:
             if key.strip().lower() == "log_level":
                 LOG_LEVEL = int(value.strip())
 except Exception:
-    LOG_LEVEL = 1
+    LOG_LEVEL = 2
 
 def log_debug(message: str) -> None:
     if LOG_LEVEL >= 2:
+        with open("pyUIPC.log", "a") as log_file:
+            log_file.write(f"{message}\n")
+
+def log_verbose(message: str) -> None:
+    if LOG_LEVEL >= 1:
         with open("pyUIPC.log", "a") as log_file:
             log_file.write(f"{message}\n")
 
@@ -303,6 +308,7 @@ def update_snapshot() -> None:
         log(f"Landing rate captured: {_landing_rate_raw / 256.0 * 60 * 3.28084:.2f} fpm")
     _write_s32(0x030C, _landing_rate_raw)
     _write_u8(0x0366, on_ground)
+    log_verbose(f"GROUND FLAG set to {on_ground}")
     _last_on_ground = on_ground
 
     stall_ratio = clamp(read_float("sim/flightmodel2/misc/stall_warning_ratio"), 0.0, 1.0)
@@ -330,6 +336,10 @@ def update_snapshot() -> None:
     _write_u8(0x0280, nav_on)
     _write_u8(0x0281, 1 if (beacon_on or strobe_on) else 0)
     _write_u8(0x028C, landing_on)
+    log_verbose(
+        f"LIGHTS nav={nav_on} beacon={beacon_on} strobe={strobe_on} "
+        f"landing={landing_on} taxi={taxi_on} panel={panel_on}"
+    )
 
     lights_bits = 0
     lights_bits |= nav_on << 0
@@ -365,6 +375,7 @@ def update_snapshot() -> None:
     # Gear
     gear_handle = read_int("sim/cockpit2/controls/gear_handle_down")
     _write_u16(0x0BE8, 1 if gear_handle else 0)
+    log_verbose(f"GEAR HANDLE: {gear_handle}")
     gear_type = read_float("sim/flightmodel/misc/gear_type")
     if gear_type <= 0.5:
         gear_flags = 0
@@ -376,6 +387,7 @@ def update_snapshot() -> None:
         gear_flags = 2
     _write_u16(0x060C, gear_flags)
     _write_u16(0x060E, 1 if gear_flags == 1 else 0)
+    log_verbose(f"GEAR TYPE: xp={gear_type:.1f} fsuipc={gear_flags}")
     deploy = read_array("sim/flightmodel/parts/gear_deploy", 3)
     deploy_offsets = (0x0C34, 0x0C30, 0x0C38)
     all_down = True
@@ -385,6 +397,7 @@ def update_snapshot() -> None:
             all_down = False
         _write_u16(off, int(ratio * 16383.0))
     _write_u16(0x0C3C, 16383 if all_down else 0)
+    log_verbose(f"GEAR DEPLOY: mainL={deploy[0]:.2f} mainR={deploy[1]:.2f} nose={deploy[2]:.2f} all_down={all_down}")
 
     # Engines
     n1 = read_array("sim/flightmodel/engine/ENGN_N1_", 4)
