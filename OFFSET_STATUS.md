@@ -12,7 +12,7 @@
 | 0x02B4 / 0x02B8 | 4 | Ground speed / TAS | ✅ Implementiert | `sim/flightmodel/position/groundspeed`, `true_airspeed` |
 | 0x02BC | 4 | IAS (Knots ×128) | ✅ Implementiert | `sim/cockpit2/gauges/indicators/airspeed_kts_pilot` |
 | 0x02C4 / 0x02C8 | 4 | Barber pole / Vertical speed | ✅ Implementiert | Fixwert (Barber pole), `sim/flightmodel/position/vh_ind_fpm` |
-| 0x030C | 2 | Landing rate (ft/min) | ✅ Implementiert | Durchschnitt der letzten `vh_ind_fpm`-Samples vor Touchdown |
+| 0x030C | 4 | Landing rate (signed 256×m/s) | ✅ Implementiert | Aktueller Vertikal-Speed in der Luft, „frozen“ beim On-Ground-Übergang |
 | 0x0366 / 0x036C / 0x036D | 1 | On ground / Stall / Overspeed | ✅ Implementiert | `sim/flightmodel/failures/onground_any`, `sim/flightmodel2/misc/...` |
 | 0x0020 / 0x0B4C | 4 / 2 | Ground altitude | ✅ Implementiert | `elevation - y_agl` |
 | 0x0280 / 0x0281 / 0x028C | 1 | Lights | ✅ Implementiert | `sim/cockpit2/switches/...` |

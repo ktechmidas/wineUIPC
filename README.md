@@ -1,6 +1,6 @@
-# fakeFSUIPC / pyUIPC Bridge
+# pyUIPC Bridge
 
-> Alpha-stage toolchain that lets **A Pilot’s Life – Chapter 2** talk to **X-Plane** through a lightweight, Wine-friendly replacement for FSUIPC.
+> Alpha-stage toolchain that lets an **FSUIPC client** under Wine like **A Pilot’s Life – Chapter 2** talk to **X-Plane** through a lightweight, Wine-friendly replacement for FSUIPC.
 
 The repository contains two cooperating components:
 

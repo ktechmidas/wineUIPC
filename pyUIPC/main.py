@@ -229,7 +229,7 @@ def metres_to_fs_ground_alt(metres: float) -> Tuple[int, int]:
 
 
 def update_snapshot() -> None:
-    global _prev_xpdr_code, _prev_xpdr_mode, _last_on_ground, _landing_rate_fpm, _vs_history
+    global _prev_xpdr_code, _prev_xpdr_mode, _last_on_ground, _landing_rate_raw
     # Handshake Offsets
     _write_u32(0x3304, 0x19980005)
     _write_u16(0x3308, 10)
@@ -251,8 +251,9 @@ def update_snapshot() -> None:
     if ias_kts <= 0.0:
         ias_mps_fallback = read_float("sim/flightmodel/position/indicated_airspeed")
         ias_kts = max(0.0, ias_mps_fallback * 1.943844)
-    vs_fpm = read_float("sim/flightmodel/position/vh_ind_fpm")
-    on_ground = 1 if read_int("sim/flightmodel/failures/onground_any") else 0
+    vs_mps = read_float("sim/flightmodel/position/vh_ind_fpm") / 196.850394  # convert ft/min to m/s for 0x02C8
+    vs_fpm = vs_mps * 196.850394
+    on_ground = 1 if read_int("sim/flightmodel/parts/on_ground_main") else 0
     y_agl = read_float("sim/flightmodel/position/y_agl")
 
     enc_lat = encode_latitude(lat)
@@ -272,20 +273,15 @@ def update_snapshot() -> None:
     _write_u32(0x02B8, encode_speed_knots128(tas_mps * 1.943844))
     _write_u32(0x02BC, encode_speed_knots128(ias_kts))
     _write_u32(0x02C4, encode_speed_knots128(320.0))
-    _write_u32(0x02C8, encode_vs_mps256(vs_fpm * 0.00508))
+    _write_u32(0x02C8, encode_vs_mps256(vs_mps))
 
-    _write_u8(0x0366, on_ground)
     if on_ground == 0:
-        _vs_history.append(vs_fpm)
-        if len(_vs_history) > 20:
-            _vs_history = _vs_history[-20:]
-
-    if _last_on_ground == 0 and on_ground == 1:
-        samples = _vs_history[-5:] if _vs_history else [vs_fpm]
-        landing_rate = sum(samples) / len(samples)
-        _landing_rate_fpm = clamp(landing_rate, -20000.0, 20000.0)
-        log(f"Landing rate capture: {landing_rate:.2f} fpm from {len(samples)} samples")
-        _vs_history.clear()
+        _landing_rate_raw = int(vs_mps * 256.0)
+    elif _last_on_ground == 0 and on_ground == 1:
+        _landing_rate_raw = int(vs_mps * 256.0)
+        log(f"Landing rate captured: {_landing_rate_raw / 256.0 * 60 * 3.28084:.2f} fpm")
+    _write_s32(0x030C, _landing_rate_raw)
+    _write_u8(0x0366, on_ground)
     _last_on_ground = on_ground
 
     stall_ratio = clamp(read_float("sim/flightmodel2/misc/stall_warning_ratio"), 0.0, 1.0)
@@ -357,20 +353,33 @@ def update_snapshot() -> None:
     n1 = read_array("sim/flightmodel/engine/ENGN_N1_", 4)
     n2 = read_array("sim/flightmodel/engine/ENGN_N2_", 4)
     eng_running = read_int_array("sim/flightmodel/engine/ENGN_running", 4)
+    fuel_flow_gph = read_array("sim/flightmodel/misc/fuel_flow_gph", 4)
+    oil_temp = read_array("sim/flightmodel/engine/ENGN_oilt", 4)
+    oil_press = read_array("sim/flightmodel/engine/oil_pressure_psi", 4)
     engine_slots = (
-        (0x0894, 0x0896, 0x0898),
-        (0x092C, 0x092E, 0x0930),
-        (0x09C4, 0x09C6, 0x09C8),
-        (0x0A5C, 0x0A5E, 0x0A60),
+        (0x0894, 0x0896, 0x0898, 0x090A, 0x08B8, 0x08BA),
+        (0x092C, 0x092E, 0x0930, 0x0942, 0x0950, 0x0952),
+        (0x09C4, 0x09C6, 0x09C8, 0x09DA, 0x09E8, 0x09EA),
+        (0x0A5C, 0x0A5E, 0x0A60, 0x0A72, 0x0A80, 0x0A82),
     )
-    for idx, (comb_off, n2_off, n1_off) in enumerate(engine_slots):
+    for idx, (comb_off, n2_off, n1_off, ff_off, oil_temp_off, oil_press_off) in enumerate(engine_slots):
+        _write_u16(n2_off, 0xFFFF)
+        _write_u16(n1_off, 0xFFFF)
         n1_val = n1[idx] if idx < len(n1) else 0.0
         n2_val = n2[idx] if idx < len(n2) else 0.0
+        ff_gph = fuel_flow_gph[idx] if idx < len(fuel_flow_gph) else 0.0
+        temp_c = oil_temp[idx] if idx < len(oil_temp) else 0.0
+        press_psi = oil_press[idx] if idx < len(oil_press) else 0.0
         running = eng_running[idx] if idx < len(eng_running) else 0
-        combust = 1 if running else (1 if n1_val > 0.1 else 0)
+        if running:
+            _write_u16(n2_off, int(clamp(n2_val, 0.0, 110.0) / 100.0 * 16384.0))
+            _write_u16(n1_off, int(clamp(n1_val, 0.0, 110.0) / 100.0 * 16384.0))
+        combust = 1 if running else 0
         _write_u16(comb_off, combust)
-        _write_u16(n2_off, int(clamp(n2_val, 0.0, 110.0) / 100.0 * 16384.0))
-        _write_u16(n1_off, int(clamp(n1_val, 0.0, 110.0) / 100.0 * 16384.0))
+        lbs_per_hr = clamp(ff_gph * 6.7, 0.0, 65535.0)
+        _write_u32(ff_off, int(lbs_per_hr))
+        _write_u16(oil_temp_off, int(clamp(temp_c * 9.0 / 5.0 + 32.0, -273.0, 999.0) / 140.0 * 16384.0))
+        _write_u16(oil_press_off, int(clamp(press_psi, 0.0, 220.0) / 55.0 * 16384.0))
     engine_count = read_int("sim/aircraft/prop/acf_num_engines")
     if engine_count <= 0:
         engine_count = len(n1) if n1 else 1
@@ -422,7 +431,6 @@ def update_snapshot() -> None:
     g_units = int(g_force * 625.0)
     _write_int(0x11BA, g_units, 2, signed=True)
     _write_int(0x11B8, g_units, 2, signed=True)
-    _write_s16(0x030C, int(_landing_rate_fpm))
 
     # Wind (surface + ambient simple mapping: use first layer)
     wind_speeds = read_array_range("sim/weather/wind_speed_kt", 0, 3)
@@ -626,8 +634,7 @@ _flightloop = None
 _prev_xpdr_code: Optional[int] = None
 _prev_xpdr_mode: Optional[int] = None
 _last_on_ground = 0
-_landing_rate_fpm = 0.0
-_vs_history: List[float] = []
+_landing_rate_raw = 0
 
 
 def XPluginStart():
