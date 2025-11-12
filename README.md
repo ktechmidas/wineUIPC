@@ -128,6 +128,9 @@ A simple `CHANGELOG.md` template (to add later):
 - [ ] Add a “Restart Bridge” button to `uipc_bridge` to rebind the socket without closing Wine.
 - [ ] Update simulator identification strings (e.g. replace “P3D” with “X-Plane”) wherever the bridge reports the platform to clients/logs.
 - [ ] Review altitude source: switch from true elevation to the same indicated altitude used by cockpit instruments if FSUIPC clients expect that.
+- [ ] Gear offsets (0x060C/0x060E/0x0C30ff) are implemented but still untested in APL2—verify with multiple aircraft.
+- [ ] Expand engine telemetry (fuel flow, oil temp/pressure, etc.) beyond the basic offsets already published.
+- [ ] Add simple logging configuration (`pyUIPC.cfg` + `pyUIPC.log`) to the documentation once finalised.
 
 ---
 
