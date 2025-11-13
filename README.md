@@ -110,6 +110,11 @@ A simple `CHANGELOG.md` template (to add later):
 4. **Logs:**
    - `python.txt` (in the repository root) records every snapshot plus custom diagnostic lines (e.g., transponder updates).
    - `uipc_bridge.log` captures socket/IPC issues on the Windows side.
+   - `pyUIPC.log` (same folder as the plugin) can be enabled via `pyUIPC.cfg`:
+     ```ini
+     log_level=0  # 0=off, 1=verbose, 2=debug
+     ```
+     Remove or raise `log_level` for more detailed troubleshooting output (gear status, ground flag, etc.).
 
 ---
 
