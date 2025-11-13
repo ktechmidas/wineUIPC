@@ -25,9 +25,13 @@ from typing import Any, Dict, Optional, Tuple, Callable, List
 
 import xp  # bereitgestellt durch XPPython3
 
+PLUGIN_DIR = os.path.dirname(__file__)
+CFG_PATH = os.path.join(PLUGIN_DIR, "pyUIPC.cfg")
+LOG_PATH = os.path.join(PLUGIN_DIR, "pyUIPC.log")
+
 LOG_LEVEL = 2
 try:
-    with open("pyUIPC.cfg", "r") as cfg:
+    with open(CFG_PATH, "r") as cfg:
         for line in cfg:
             line = line.strip()
             if not line or line.startswith("#"):
@@ -40,12 +44,12 @@ except Exception:
 
 def log_debug(message: str) -> None:
     if LOG_LEVEL >= 2:
-        with open("pyUIPC.log", "a") as log_file:
+        with open(LOG_PATH, "a") as log_file:
             log_file.write(f"{message}\n")
 
 def log_verbose(message: str) -> None:
     if LOG_LEVEL >= 1:
-        with open("pyUIPC.log", "a") as log_file:
+        with open(LOG_PATH, "a") as log_file:
             log_file.write(f"{message}\n")
 
 # ---------- Plugin Meta ----------
@@ -276,10 +280,11 @@ def update_snapshot() -> None:
         ias_kts = max(0.0, ias_mps_fallback * 1.943844)
     vs_fpm = read_float("sim/flightmodel/position/vh_ind_fpm")
     vs_mps = vs_fpm * 0.00508
-    on_ground_any = read_int("sim/flightmodel2/gear/on_ground")
+    gear_on_ground = read_int_array("sim/flightmodel2/gear/on_ground", 3)
+    on_ground_any = any(gear_on_ground)
     on_ground_main = read_int("sim/flightmodel/parts/on_ground_main")
     on_ground = 1 if (on_ground_any or on_ground_main) else 0
-    log_debug(f"GROUND: any={on_ground_any} main={on_ground_main} -> {on_ground}")
+    log_debug(f"GROUND: gear={gear_on_ground} main={on_ground_main} -> {on_ground}")
     y_agl = read_float("sim/flightmodel/position/y_agl")
 
     enc_lat = encode_latitude(lat)
@@ -458,25 +463,22 @@ def update_snapshot() -> None:
     encoded_code = encode_bcd4(int(xpdr_code), octal=True)
     _write_u16(0x0354, encoded_code)
     xpdr_mode = clamp(read_int_fallback((
-        "sim/cockpit2/radios/actuators/transponder_mode",
         "sim/cockpit/radios/transponder_mode",
+        "sim/cockpit2/radios/actuators/transponder_mode",
     )), 0, 4)
     if xpdr_mode <= 0:
-        fs_xpdr_mode = 0  # OFF/GND
+        fs_mode = 0  # OFF
     elif xpdr_mode == 1:
-        fs_xpdr_mode = 1  # STBY
-    elif xpdr_mode == 3:
-        fs_xpdr_mode = 2  # TEST
-    elif xpdr_mode == 4:
-        fs_xpdr_mode = 3  # ON (Mode A)
+        fs_mode = 1  # STBY
+    elif xpdr_mode == 2:
+        fs_mode = 3  # ON
     else:
-        fs_xpdr_mode = 4  # ALT (Mode C/S)
-    _write_u8(0x0B46, fs_xpdr_mode)
-    _write_u8(0x7B91, fs_xpdr_mode)
-    if _prev_xpdr_code != encoded_code or _prev_xpdr_mode != fs_xpdr_mode:
-        log(f"XPDR code={xpdr_code:04d} encoded=0x{encoded_code:04X} mode={fs_xpdr_mode}")
+        fs_mode = 4  # ALT
+    _write_u8(0x0328, fs_mode)
+    if _prev_xpdr_code != encoded_code or _prev_xpdr_mode != fs_mode:
+        log(f"XPDR code={xpdr_code:04d} encoded=0x{encoded_code:04X} mode={fs_mode}")
         _prev_xpdr_code = encoded_code
-        _prev_xpdr_mode = fs_xpdr_mode
+        _prev_xpdr_mode = fs_mode
 
     # G-force (normal)
     g_force = clamp(read_float("sim/flightmodel2/misc/gforce_normal"), -8.0, 8.0)
