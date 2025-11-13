@@ -393,7 +393,7 @@ def update_snapshot() -> None:
         gear_flags = 0
     _write_u16(0x060C, gear_flags)
     _write_u16(0x060E, 1 if gear_flags == 1 else 0)
-    log_debug(f"GEAR TYPE: xp={gear_type:.1f} retract={has_retract:.1f} fsuipc={gear_flags}")
+    log_verbose(f"GEAR TYPE: xp={gear_type:.1f} retract={has_retract:.1f} fsuipc={gear_flags}")
     deploy = read_array("sim/flightmodel/parts/gear_deploy", 3)
     deploy_offsets = (0x0C34, 0x0C30, 0x0C38)
     all_down = True
