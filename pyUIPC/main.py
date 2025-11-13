@@ -385,9 +385,7 @@ def update_snapshot() -> None:
     log_debug(f"GEAR HANDLE: {gear_handle}")
     gear_type = read_float("sim/flightmodel/misc/gear_type")
     has_retract = read_float("sim/aircraft/gear/acf_gear_retract")
-    if gear_type <= 0.5:
-        gear_flags = 0
-    elif has_retract >= 1.0 or gear_type >= 2.0:
+    if has_retract >= 1.0 or gear_type >= 2.0:
         gear_flags = 1
     else:
         gear_flags = 0
