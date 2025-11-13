@@ -383,15 +383,14 @@ def update_snapshot() -> None:
     gear_handle = read_int("sim/cockpit2/controls/gear_handle_down")
     _write_u16(0x0BE8, 1 if gear_handle else 0)
     log_debug(f"GEAR HANDLE: {gear_handle}")
-    gear_type = read_float("sim/flightmodel/misc/gear_type")
     has_retract = read_float("sim/aircraft/gear/acf_gear_retract")
-    if has_retract >= 1.0 or gear_type >= 2.0:
+    if has_retract >= 1.0:
         gear_flags = 1
     else:
         gear_flags = 0
     _write_u16(0x060C, gear_flags)
-    _write_u16(0x060E, 1 if gear_flags == 1 else 0)
-    log_verbose(f"GEAR TYPE: xp={gear_type:.1f} retract={has_retract:.1f} fsuipc={gear_flags}")
+    _write_u16(0x060E, gear_flags)
+    log_verbose(f"GEAR TYPE: retract_ref={has_retract:.1f} fsuipc={gear_flags}")
     deploy = read_array("sim/flightmodel/parts/gear_deploy", 3)
     deploy_offsets = (0x0C34, 0x0C30, 0x0C38)
     all_down = True
