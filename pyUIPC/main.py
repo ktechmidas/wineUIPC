@@ -343,7 +343,7 @@ def update_snapshot() -> None:
     _write_u8(0x0280, nav_on)
     _write_u8(0x0281, 1 if (beacon_on or strobe_on) else 0)
     _write_u8(0x028C, landing_on)
-    log_verbose(
+    log_debug(
         f"LIGHTS nav={nav_on} beacon={beacon_on} strobe={strobe_on} "
         f"landing={landing_on} taxi={taxi_on} panel={panel_on}"
     )
@@ -382,7 +382,7 @@ def update_snapshot() -> None:
     # Gear
     gear_handle = read_int("sim/cockpit2/controls/gear_handle_down")
     _write_u16(0x0BE8, 1 if gear_handle else 0)
-    log_verbose(f"GEAR HANDLE: {gear_handle}")
+    log_debug(f"GEAR HANDLE: {gear_handle}")
     gear_type = read_float("sim/flightmodel/misc/gear_type")
     if gear_type <= 0.5:
         gear_flags = 0
@@ -394,7 +394,7 @@ def update_snapshot() -> None:
         gear_flags = 2
     _write_u16(0x060C, gear_flags)
     _write_u16(0x060E, 1 if gear_flags == 1 else 0)
-    log_verbose(f"GEAR TYPE: xp={gear_type:.1f} fsuipc={gear_flags}")
+    log_debug(f"GEAR TYPE: xp={gear_type:.1f} fsuipc={gear_flags}")
     deploy = read_array("sim/flightmodel/parts/gear_deploy", 3)
     deploy_offsets = (0x0C34, 0x0C30, 0x0C38)
     all_down = True
@@ -404,7 +404,7 @@ def update_snapshot() -> None:
             all_down = False
         _write_u16(off, int(ratio * 16383.0))
     _write_u16(0x0C3C, 16383 if all_down else 0)
-    log_verbose(f"GEAR DEPLOY: mainL={deploy[0]:.2f} mainR={deploy[1]:.2f} nose={deploy[2]:.2f} all_down={all_down}")
+    log_debug(f"GEAR DEPLOY: mainL={deploy[0]:.2f} mainR={deploy[1]:.2f} nose={deploy[2]:.2f} all_down={all_down}")
 
     # Engines
     n1 = read_array("sim/flightmodel/engine/ENGN_N1_", 4)
