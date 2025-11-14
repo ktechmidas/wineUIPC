@@ -37,8 +37,7 @@
 
 | Offset | Größe | Beschreibung | Status | Vorschlag |
 |--------|-------|--------------|--------|-----------|
-| 0x030F | 2 | Touchdown timestamp | ❌ Offen | `sim/time/local_time_sec` beim Touchdown |
-| 0x0840 | 2 | Crash indicator | ❌ Testen | `sim/operation/failures/rel_fail`, `sim/operation/runway_status/crashed` |
+| 0x0840 | 2 | Crash indicator | ✅ Implementiert | `sim/flightmodel/failures/over_g` + `sim/flightmodel/failures/onground_any` |
 | 0x0778 / 0x078C / 0x0794 | 4 | Flaps/Spoilers/Strobes available | ⛔ Nicht verfügbar | Keine verlässliche X-Plane-Flags (kein `has spoilers` DataRef) |
 | 0x02A0 | 2 | Magnetic variation | ✅ Implementiert | `sim/flightmodel/position/magnetic_variation` |
 | 0x02CC | 8 | Compass heading | ❌ Offen | `sim/cockpit2/gauges/indicators/heading_electric_deg_mag_pilot` |

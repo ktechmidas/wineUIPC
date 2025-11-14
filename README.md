@@ -30,12 +30,14 @@ Together they allow Windows-only tooling (APL2, FSUIPC clients, etc.) to operate
 | Stall / overspeed / G-force | ✅     | Derived from `sim/flightmodel2` ratios. |
 | Lights & switches           | ✅     | Individual bits plus aggregated mask (0x0D0C). |
 | Flaps / spoilers / gear     | ✅     | Includes spoiler arm and gear ratios. |
-
-> Limitation: X-Plane does not expose a reliable “has spoilers” flag, so the FSUIPC availability offsets (0x0778/0x078C/0x0794) remain deprecated and are left unset.
 | Engines                     | ✅     | 1–4 engines, combustion + N1/N2 + engine count (0x0AEC). |
 | Transponder                 | ✅     | Squawk at 0x0354, mode mirrored to 0x0B46 and 0x7B91. |
-| Wind & weather              | ✅     | Surface layer speed/direction. |
+| Wind & weather              | ✅     | Ambient wind from `sim/weather/aircraft/wind_now_*`, surface layer from `sim/weather/region/wind_*[0]`. |
 | Slew / pause detection      | ⏳     | Pause wired; slew flag still TODO. |
+
+> Limitation: X-Plane does not expose a reliable “has spoilers” flag, so the FSUIPC availability offsets (0x0778/0x078C/0x0794) remain deprecated and are left unset.
+
+See `CABIN_SIGNS.md` for the evolving list of cabin-sign datarefs (default + popular add-ons).
 
 ---
 
@@ -74,7 +76,7 @@ A simple `CHANGELOG.md` template (to add later):
 ┌──────────────────────┐         TCP JSON          ┌──────────────────────┐
 │  Windows client      │  WM_COPYDATA / shared     │  pyUIPC (XPPython3)  │
 │  (APL2 via Wine) ───►│  memory → uipc_bridge ───►│  + X-Plane datarefs  │
-└──────────────────────┘                            └──────────────────────┘
+└──────────────────────┘                           └──────────────────────┘
 ```
 
 1. APL2 issues normal FSUIPC IPC blocks.
@@ -110,32 +112,29 @@ A simple `CHANGELOG.md` template (to add later):
    - Start APL2; it should detect FSUIPC and show live data.
 
 4. **Logs:**
-   - `python.txt` (in the repository root) records every snapshot plus custom diagnostic lines (e.g., transponder updates).
+   - `python.txt` (repo root) is XPPython3’s standard log—use it for crash reports or plugin load errors.
    - `uipc_bridge.log` captures socket/IPC issues on the Windows side.
-   - `pyUIPC.log` (same folder as the plugin) can be enabled via `pyUIPC.cfg`:
+   - `pyUIPC.log` (same folder as the plugin) is the plugin’s structured log. Control verbosity via `pyUIPC.cfg`:
      ```ini
      log_level=0  # 0=off, 1=verbose, 2=debug
      ```
-     Remove or raise `log_level` for more detailed troubleshooting output (gear status, ground flag, etc.).
+     Set `log_level=2` when chasing dataref mappings (gear, winds, cabin signs) and attach excerpts to PRs.
 
 ---
 
 ## Roadmap
-- [ ] Finish transponder compatibility for APL2 (confirm which offset it reads and mirror accordingly).
+- [x] Finish transponder compatibility for APL2 (confirm which offset it reads and mirror accordingly).
 - [ ] Validate overspeed detection against APL2 scoring.
-- [ ] Investigate Toliss A320 datarefs for seatbelt/no-smoking signs and mirror into 0x3414/0x3415.
-- [ ] Publish gear handle + per-wheel states (offsets 0x0BE8/0x0BF0+) and add dedicated “gear up/down” logging.
+- [x] Investigate Toliss A320 + popular add-on datarefs for seatbelt/no-smoking signs and mirror into 0x3414/0x3415.
+- [x] Publish gear handle + per-wheel states (offsets 0x0BE8/0x0BF0+) and add dedicated “gear up/down” logging.
 - [x] Determine flags for “retractable gear” (0x060C/0x060E) using `sim/aircraft/gear/acf_gear_retract`.
 - [ ] Determine flags/offsets for “flaps available” and “strobes available”. Spoiler availability is currently blocked because no X-Plane dataref exposes a “has spoilers” capability flag.
-- [ ] Implement crash indicator (offset 0x0840) and verify behaviour in APL2.
-- [ ] Populate touchdown time (0x030F) alongside landing rate to match FSUIPC behaviour.
+- [x] Implement crash indicator (offset 0x0840) using `sim/flightmodel/failures/over_g` + `sim/flightmodel/failures/onground_any`.
 - [ ] Expose wind layers beyond surface (upper/middle) plus turbulence for more realism.
-- [ ] Research an X-Plane 12 dataref/strategy for “slew mode” (e.g. `sim/operation/override/override_slew`) so we can map offset 0x05DC instead of leaving it unsupported.
 - [ ] Automate regression flights via replay or scripted XP tools.
 - [ ] Enhance `uipc_bridge` UI: add “Connected” status text and a dedicated “Close/Exit” button that stops the message loop cleanly.
 - [ ] Add a “Restart Bridge” button to `uipc_bridge` to rebind the socket without closing Wine.
 - [ ] Update simulator identification strings (e.g. replace “P3D” with “X-Plane”) wherever the bridge reports the platform to clients/logs.
-- [ ] Review altitude source: switch from true elevation to the same indicated altitude used by cockpit instruments if FSUIPC clients expect that.
 - [ ] Gear offsets (0x060C/0x060E/0x0C30ff) are implemented but still untested in APL2—verify with multiple aircraft.
 - [x] Expand engine telemetry (fuel flow, oil temp/pressure, etc.) beyond the basic offsets already published.
 - [x] Add simple logging configuration (`pyUIPC.cfg` + `pyUIPC.log`) to the documentation once finalised.
@@ -145,15 +144,11 @@ A simple `CHANGELOG.md` template (to add later):
 ## Contributing
 
 1. Fork and create a feature branch (`feat/<name>` or `fix/<name>`).
-2. Run X-Plane with the updated plugin and attach relevant snippets from `python.txt`/`uipc_bridge.log` when opening a PR.
-3. Keep Python changes formatted (PEP8-ish) and prefer small dedicated commits per feature.
+2. Reproduce your change with X-Plane + APL2 running, then attach:
+   - `pyUIPC.log` (set `log_level=2` before testing for detailed offsets),
+   - screenshots or client behaviour notes if applicable.
+3. Keep Python changes formatted (PEP8-ish), include inline comments for non-obvious dataref mappings, and prefer small dedicated commits per feature.
 
 ---
 
-## License
-
-_TBD – insert MIT/BSD/GPL notice once we settle on the licensing model._
-
----
-
-For questions or debugging help drop the latest `python.txt` excerpt plus your APL2 symptom into an issue. Happy flying! ✈️
+For questions or debugging help drop the latest `pyUIPC.log` excerpt plus your APL2 symptom into an issue. Happy flying! ✈️

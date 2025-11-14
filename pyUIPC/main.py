@@ -70,6 +70,23 @@ FLIGHTLOOP_INTERVAL = 0.01  # 10 ms – genug für zügige Antworten
 MAX_PER_TICK = 100          # Sicherheitslimit
 REPLY_TIMEOUT = 2.0         # Sekunden; Netz-Handler wartet so lange auf das Ergebnis
 MAX_SPOILER_DEFLECTION_DEG = 60.0  # reasonable default for scaling
+CABIN_SIGN_SOURCES = {
+    "seatbelt": (
+        ("laminar/B738/toggle_seatbelt_sign", "bool"),
+        ("toliss/apu/pedestal/seat_belts", "mode"),
+        ("XCrafts/ERJ/overhead/seat_belts", "mode"),
+        ("ff/seatsigns_on", "bool"),
+        ("sim/cockpit2/annunciators/seatbelt_on", "bool"),
+        ("sim/cockpit2/switches/fasten_seat_belts", "mode"),
+    ),
+    "nosmoke": (
+        ("laminar/B738/toggle_smoking_sign", "bool"),
+        ("toliss/apu/pedestal/no_smoking", "mode"),
+        ("XCrafts/ERJ/overhead/no_smoking", "mode"),
+        ("sim/cockpit2/annunciators/smoking_on", "bool"),
+        ("sim/cockpit2/switches/no_smoking", "mode"),
+    ),
+}
 
 # ---------- Logging ----------
 
@@ -103,6 +120,25 @@ def _avg_spoiler_deflection(values: List[float], start: int, count: int) -> floa
     if not acc:
         return 0.0
     return sum(acc) / len(acc)
+
+def _resolve_cabin_sign(sign: str) -> int:
+    sources = CABIN_SIGN_SOURCES.get(sign, ())
+    for dataref, mode in sources:
+        if mode == "bool":
+            val = read_int_optional(dataref)
+            if val is None:
+                float_val = read_float_optional(dataref)
+                if float_val is None:
+                    continue
+                val = 1 if float_val >= 0.5 else 0
+            val = 1 if val else 0
+            return 2 if val else 0
+        if mode == "mode":
+            raw = read_int_optional(dataref)
+            if raw is None:
+                continue
+            return int(clamp(raw, 0, 2))
+    return 0
 
 # ---------- Request Pipeline (Mainthread Executor) ----------
 
@@ -190,6 +226,18 @@ def read_int(name: str) -> int:
     if handle is None:
         return 0
     return xp.getDatai(handle)
+
+def read_int_optional(name: str) -> Optional[int]:
+    handle = dr(name)
+    if handle is None:
+        return None
+    return xp.getDatai(handle)
+
+def read_float_optional(name: str) -> Optional[float]:
+    handle = dr(name)
+    if handle is None:
+        return None
+    return xp.getDataf(handle)
 
 def read_int_fallback(names: Tuple[str, ...], default: int = 0) -> int:
     for name in names:
@@ -305,6 +353,7 @@ def update_snapshot() -> None:
     on_ground_any = any(gear_on_ground)
     on_ground_main = read_int("sim/flightmodel/parts/on_ground_main")
     on_ground = 1 if (on_ground_any or on_ground_main) else 0
+    failure_onground = 1 if read_int("sim/flightmodel/failures/onground_any") else 0
     log_debug(f"GROUND: gear={gear_on_ground} main={on_ground_main} -> {on_ground}")
     y_agl = read_float("sim/flightmodel/position/y_agl")
 
@@ -338,6 +387,16 @@ def update_snapshot() -> None:
     _write_u8(0x0366, on_ground)
     log_verbose(f"GROUND FLAG set to {on_ground}")
     _last_on_ground = on_ground
+    over_g = 1 if read_int("sim/flightmodel/failures/over_g") else 0
+    landing_rate_fpm = (_landing_rate_raw / 256.0) * 60.0 * 3.28084
+    hard_landing = 1 if (_landing_rate_frozen and landing_rate_fpm <= -2500.0) else 0
+    crash_flag = 1 if ((over_g and failure_onground) or hard_landing) else 0
+    _write_u16(0x0840, crash_flag)
+    if crash_flag:
+        log_debug(
+            f"CRASH detected over_g={over_g} onground_fail={failure_onground} "
+            f"landing_rate_fpm={landing_rate_fpm:.1f}"
+        )
 
     stall_ratio = clamp(read_float("sim/flightmodel2/misc/stall_warning_ratio"), 0.0, 1.0)
     overspeed_ratio = clamp(read_float("sim/flightmodel2/misc/overspeed_warning_ratio"), 0.0, 1.0)
@@ -475,10 +534,11 @@ def update_snapshot() -> None:
     _write_u32(0x0B94, units)
 
     # Cabin signs (best effort)
-    seatbelt_mode = clamp(read_int("sim/cockpit2/switches/fasten_seat_belts"), 0, 2)
-    nosmoke_mode = clamp(read_int("sim/cockpit2/switches/no_smoking"), 0, 2)
+    seatbelt_mode = _resolve_cabin_sign("seatbelt")
+    nosmoke_mode = _resolve_cabin_sign("nosmoke")
     _write_u8(0x3414, int(seatbelt_mode))
     _write_u8(0x3415, int(nosmoke_mode))
+    log_debug(f"CABIN SIGNS seatbelt={seatbelt_mode} nosmoke={nosmoke_mode}")
 
     xpdr_code = clamp(read_int_fallback((
         "sim/cockpit2/radios/actuators/transponder_code",
@@ -510,17 +570,27 @@ def update_snapshot() -> None:
     _write_int(0x11BA, g_units, 2, signed=True)
     _write_int(0x11B8, g_units, 2, signed=True)
 
-    # Wind (surface + ambient simple mapping: use first layer)
-    wind_speeds = read_array_range("sim/weather/wind_speed_kt", 0, 3)
-    wind_dirs = read_array_range("sim/weather/wind_direction_degt", 0, 3)
-    wind_speed = clamp(wind_speeds[0] if wind_speeds else 0.0, 0.0, 65535.0)
-    wind_dir = wind_dirs[0] if wind_dirs else 0.0
-    wind_speed_u16 = int(wind_speed + 0.5)
-    wind_dir_u16 = encode_direction16(wind_dir)
-    _write_u16(0x0E90, wind_speed_u16)
-    _write_u16(0x0E92, wind_dir_u16)
-    _write_u16(0x0EF0, wind_speed_u16)
-    _write_u16(0x0EF2, wind_dir_u16)
+    # Wind (ambient + surface layer)
+    ambient_speed_knots = clamp(read_float("sim/weather/aircraft/wind_now_speed_msc") * 1.943844, 0.0, 65535.0)
+    ambient_dir_true = read_float("sim/weather/aircraft/wind_now_direction_degt")
+    if ambient_speed_knots <= 0.1:
+        ambient_speed_knots = clamp(read_array_range("sim/weather/wind_speed_kt", 0, 1)[0], 0.0, 65535.0)
+    if abs(ambient_dir_true) < 0.001:
+        ambient_dir_true = read_array_range("sim/weather/wind_direction_degt", 0, 1)[0]
+    _write_u16(0x0E90, int(ambient_speed_knots + 0.5))
+    _write_u16(0x0E92, encode_direction16(ambient_dir_true))
+
+    surface_region_speed = read_array_range("sim/weather/region/wind_speed_kt", 0, 1)[0]
+    surface_region_dir = read_array_range("sim/weather/region/wind_direction_degt", 0, 1)[0]
+    surface_region_top_msl = read_array_range("sim/weather/region/wind_altitude_msl_m", 0, 1)[0]
+    surface_speed_knots = clamp(surface_region_speed if surface_region_speed > 0.0 else ambient_speed_knots, 0.0, 65535.0)
+    surface_dir_true = surface_region_dir if surface_region_dir != 0.0 else ambient_dir_true
+    surface_dir_mag = surface_dir_true - mag_var  # convert True → Magnetic (positive variation = East)
+    surface_dir_u16 = encode_direction16(surface_dir_mag)
+    surface_ceiling_agl = max(0.0, surface_region_top_msl - ground_alt_m)
+    _write_u16(0x0EEE, int(min(surface_ceiling_agl, 65535.0) + 0.5))
+    _write_u16(0x0EF0, int(surface_speed_knots + 0.5))
+    _write_u16(0x0EF2, surface_dir_u16)
 
 # parse FS6IPC block
 
