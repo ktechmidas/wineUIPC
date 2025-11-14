@@ -30,6 +30,8 @@ Together they allow Windows-only tooling (APL2, FSUIPC clients, etc.) to operate
 | Stall / overspeed / G-force | ✅     | Derived from `sim/flightmodel2` ratios. |
 | Lights & switches           | ✅     | Individual bits plus aggregated mask (0x0D0C). |
 | Flaps / spoilers / gear     | ✅     | Includes spoiler arm and gear ratios. |
+
+> Limitation: X-Plane does not expose a reliable “has spoilers” flag, so the FSUIPC availability offsets (0x0778/0x078C/0x0794) remain deprecated and are left unset.
 | Engines                     | ✅     | 1–4 engines, combustion + N1/N2 + engine count (0x0AEC). |
 | Transponder                 | ✅     | Squawk at 0x0354, mode mirrored to 0x0B46 and 0x7B91. |
 | Wind & weather              | ✅     | Surface layer speed/direction. |
@@ -123,7 +125,8 @@ A simple `CHANGELOG.md` template (to add later):
 - [ ] Validate overspeed detection against APL2 scoring.
 - [ ] Investigate Toliss A320 datarefs for seatbelt/no-smoking signs and mirror into 0x3414/0x3415.
 - [ ] Publish gear handle + per-wheel states (offsets 0x0BE8/0x0BF0+) and add dedicated “gear up/down” logging.
-- [ ] Determine flags/offsets for “retractable gear”, “spoilers available”, “flaps available”, “strobes available”.
+- [x] Determine flags for “retractable gear” (0x060C/0x060E) using `sim/aircraft/gear/acf_gear_retract`.
+- [ ] Determine flags/offsets for “flaps available” and “strobes available”. Spoiler availability is currently blocked because no X-Plane dataref exposes a “has spoilers” capability flag.
 - [ ] Implement crash indicator (offset 0x0840) and verify behaviour in APL2.
 - [ ] Populate touchdown time (0x030F) alongside landing rate to match FSUIPC behaviour.
 - [ ] Expose wind layers beyond surface (upper/middle) plus turbulence for more realism.
@@ -134,8 +137,8 @@ A simple `CHANGELOG.md` template (to add later):
 - [ ] Update simulator identification strings (e.g. replace “P3D” with “X-Plane”) wherever the bridge reports the platform to clients/logs.
 - [ ] Review altitude source: switch from true elevation to the same indicated altitude used by cockpit instruments if FSUIPC clients expect that.
 - [ ] Gear offsets (0x060C/0x060E/0x0C30ff) are implemented but still untested in APL2—verify with multiple aircraft.
-- [ ] Expand engine telemetry (fuel flow, oil temp/pressure, etc.) beyond the basic offsets already published.
-- [ ] Add simple logging configuration (`pyUIPC.cfg` + `pyUIPC.log`) to the documentation once finalised.
+- [x] Expand engine telemetry (fuel flow, oil temp/pressure, etc.) beyond the basic offsets already published.
+- [x] Add simple logging configuration (`pyUIPC.cfg` + `pyUIPC.log`) to the documentation once finalised.
 
 ---
 

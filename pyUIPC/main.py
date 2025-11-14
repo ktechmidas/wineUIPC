@@ -30,6 +30,7 @@ CFG_PATH = os.path.join(PLUGIN_DIR, "pyUIPC.cfg")
 LOG_PATH = os.path.join(PLUGIN_DIR, "pyUIPC.log")
 
 LOG_LEVEL = 2
+_LOG_LOCK = threading.Lock()
 try:
     with open(CFG_PATH, "r") as cfg:
         for line in cfg:
@@ -42,15 +43,20 @@ try:
 except Exception:
     LOG_LEVEL = 2
 
+def _write_log(level: str, message: str) -> None:
+    timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+    line = f"{timestamp} [{level}] {message}\n"
+    with _LOG_LOCK:
+        with open(LOG_PATH, "a") as log_file:
+            log_file.write(line)
+
 def log_debug(message: str) -> None:
     if LOG_LEVEL >= 2:
-        with open(LOG_PATH, "a") as log_file:
-            log_file.write(f"{message}\n")
+        _write_log("DEBUG", message)
 
 def log_verbose(message: str) -> None:
     if LOG_LEVEL >= 1:
-        with open(LOG_PATH, "a") as log_file:
-            log_file.write(f"{message}\n")
+        _write_log("VERBOSE", message)
 
 # ---------- Plugin Meta ----------
 PLUGIN_NAME = "XPC In-Plugin IPC"
@@ -63,11 +69,13 @@ PORT = int(os.environ.get("XPC_PORT", "9000"))
 FLIGHTLOOP_INTERVAL = 0.01  # 10 ms – genug für zügige Antworten
 MAX_PER_TICK = 100          # Sicherheitslimit
 REPLY_TIMEOUT = 2.0         # Sekunden; Netz-Handler wartet so lange auf das Ergebnis
+MAX_SPOILER_DEFLECTION_DEG = 60.0  # reasonable default for scaling
 
 # ---------- Logging ----------
 
 def log(msg: str) -> None:
-    xp.log(f"[xpc_ipc] {msg}")
+    if LOG_LEVEL >= 1:
+        _write_log("INFO", msg)
 
 # ---------- Utils ----------
 
@@ -82,6 +90,19 @@ def bytes_to_hex(b: bytes) -> str:
 
 def clamp(value: float, lo: float, hi: float) -> float:
     return max(lo, min(hi, value))
+
+def _spoiler_deg_to_units(deg: float) -> int:
+    ratio = clamp(deg / MAX_SPOILER_DEFLECTION_DEG, 0.0, 1.0)
+    return int(ratio * 16383.0)
+
+def _avg_spoiler_deflection(values: List[float], start: int, count: int) -> float:
+    acc: List[float] = []
+    end = min(start + count, len(values))
+    for idx in range(start, end):
+        acc.append(max(0.0, values[idx]))
+    if not acc:
+        return 0.0
+    return sum(acc) / len(acc)
 
 # ---------- Request Pipeline (Mainthread Executor) ----------
 
@@ -289,8 +310,8 @@ def update_snapshot() -> None:
 
     enc_lat = encode_latitude(lat)
     enc_lon = encode_longitude(lon)
-    log(f"LAT encode: raw={lat:.6f} enc={enc_lat}")
-    log(f"LON encode: raw={lon:.6f} enc={enc_lon}")
+    log_debug(f"LAT encode: raw={lat:.6f} enc={enc_lat}")
+    log_debug(f"LON encode: raw={lon:.6f} enc={enc_lon}")
     _write_s64(0x0560, enc_lat)
     _write_s64(0x0568, enc_lon)
     _write_s64(0x0570, encode_altitude_m(alt_m))
@@ -312,7 +333,7 @@ def update_snapshot() -> None:
     elif not _landing_rate_frozen and y_agl < 2.0:
         _landing_rate_raw = int(vs_mps * 256.0)
         _landing_rate_frozen = True
-        log(f"Landing rate captured: {_landing_rate_raw / 256.0 * 60 * 3.28084:.2f} fpm")
+        log_debug(f"Landing rate captured: {_landing_rate_raw / 256.0 * 60 * 3.28084:.2f} fpm")
     _write_s32(0x030C, _landing_rate_raw)
     _write_u8(0x0366, on_ground)
     log_verbose(f"GROUND FLAG set to {on_ground}")
@@ -374,10 +395,17 @@ def update_snapshot() -> None:
     _write_u32(0x0BE0, flap_units)
     _write_u32(0x0BE4, flap_units)
     _write_u32(0x0BD0, spoiler_units)
-    _write_u32(0x0BD4, spoiler_units)
-    _write_u32(0x0BD8, spoiler_units)
+    spoiler_deflections = read_array("sim/flightmodel2/controls/spoiler_deflection_deg", 20)
+    left_def = _avg_spoiler_deflection(spoiler_deflections, 0, 10)
+    right_def = _avg_spoiler_deflection(spoiler_deflections, 10, 10)
+    _write_u32(0x0BD4, _spoiler_deg_to_units(left_def))
+    _write_u32(0x0BD8, _spoiler_deg_to_units(right_def))
     spoiler_arm = 1 if read_int("sim/cockpit2/switches/speedbrake_arm") else 0
     _write_u32(0x0BCC, 4800 if spoiler_arm else 0)
+    log_debug(
+        f"SPOILERS cmd_ratio={spoiler_ratio:.2f} left_deg={left_def:.1f} "
+        f"right_deg={right_def:.1f}"
+    )
 
     # Gear
     gear_handle = read_int("sim/cockpit2/controls/gear_handle_down")
@@ -472,7 +500,7 @@ def update_snapshot() -> None:
         fs_mode = 4  # ALT
     _write_u8(0x0328, fs_mode)
     if _prev_xpdr_code != encoded_code or _prev_xpdr_mode != fs_mode:
-        log(f"XPDR code={xpdr_code:04d} encoded=0x{encoded_code:04X} mode={fs_mode}")
+        log_debug(f"XPDR code={xpdr_code:04d} encoded=0x{encoded_code:04X} mode={fs_mode}")
         _prev_xpdr_code = encoded_code
         _prev_xpdr_mode = fs_mode
 
@@ -701,19 +729,18 @@ def XPluginStop():
 
 
 def XPluginEnable():
-    log("enable")
     global _server_thread
     if _server_thread and _server_thread.is_alive():
-        log("server thread already running, skipping restart")
+        log_debug("server thread already running, skipping restart")
     else:
         _server_stop.clear()
         _server_thread = threading.Thread(target=_serve, daemon=True)
         _server_thread.start()
+        log("server thread started")
     return 1
 
 
 def XPluginDisable():
-    log("disable")
     global _server_socket, _server_thread
     _server_stop.set()
     if _server_socket:

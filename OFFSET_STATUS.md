@@ -22,6 +22,7 @@
 | 0x0BD0–0x0BD8 | 4 | Spoilerpositionen | ✅ Implementiert | `sim/flightmodel/controls/sbrkrat` |
 | 0x0BCC | 4 | Spoiler arm | ✅ Implementiert | `sim/cockpit2/switches/speedbrake_arm` |
 | 0x0BE8 / 0x0BF0.. | 2 / 4 | Gear handle & deploy ratios | ✅ Implementiert | `sim/cockpit2/controls/gear_handle_down`, `sim/flightmodel2/gear/deploy_ratio` |
+| 0x060C / 0x060E | 2 | Gear type / retract flag | ✅ Implementiert | `sim/aircraft/gear/acf_gear_retract` |
 | 0x0894, 0x092C, 0x09C4, 0x0A5C + | 2 | Engine combustion / N1 / N2 | ✅ Implementiert | `sim/flightmodel/engine/ENGN_running`, `ENGN_N1_`, `ENGN_N2_` |
 | 0x0AEC | 2 | Engine count | ✅ Implementiert | `sim/aircraft/prop/acf_num_engines` |
 | 0x0B7C / 0x0B94 | 4 | Fuel proxy | ✅ Implementiert | `sim/flightmodel/weight/m_fuel_total` |
@@ -38,8 +39,7 @@
 |--------|-------|--------------|--------|-----------|
 | 0x030F | 2 | Touchdown timestamp | ❌ Offen | `sim/time/local_time_sec` beim Touchdown |
 | 0x0840 | 2 | Crash indicator | ❌ Testen | `sim/operation/failures/rel_fail`, `sim/operation/runway_status/crashed` |
-| 0x060E | 2 | Retractable gear flag | ⚠️ Fake | `sim/aircraft/overflow/acf_gear_retract` |
-| 0x0778 / 0x078C / 0x0794 | 4 | Flaps/Spoilers/Strobes available | ⚠️ Fake | `sim/aircraft/.../acf_has_flap/spoiler/strobe` |
+| 0x0778 / 0x078C / 0x0794 | 4 | Flaps/Spoilers/Strobes available | ⛔ Nicht verfügbar | Keine verlässliche X-Plane-Flags (kein `has spoilers` DataRef) |
 | 0x02A0 | 2 | Magnetic variation | ✅ Implementiert | `sim/flightmodel/position/magnetic_variation` |
 | 0x02CC | 8 | Compass heading | ❌ Offen | `sim/cockpit2/gauges/indicators/heading_electric_deg_mag_pilot` |
 | 0x0330 | 2 | Altimeter (Kollsman) | ❌ Offen | `sim/cockpit2/gauges/actuators/barometer_setting_in_hg_pilot` |
