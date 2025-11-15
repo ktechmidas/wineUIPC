@@ -1,9 +1,10 @@
 *
 !.gitignore
 !README.md
+!CABIN_SIGNS.md
 !OFFSET_STATUS.md
 !LICENSE
 !uipc_bridge.c
-!PI_pyUIPC.py
-!pyUIPC/
-!pyUIPC/main.py
+!PI_wineUIPC.py
+!wineUIPC/
+!wineUIPC/main.py

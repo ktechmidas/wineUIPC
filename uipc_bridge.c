@@ -17,6 +17,12 @@
 #define IPC_MAP_BYTES  (0x7F00u + 0x100u)
 #define FS6IPC_READSTATEDATA_ID  1
 #define FS6IPC_WRITESTATEDATA_ID 2
+#ifndef ARRAYSIZE
+#define ARRAYSIZE(a) (sizeof(a)/sizeof((a)[0]))
+#endif
+#define IDC_STATUS_LABEL  1001
+#define IDC_BTN_RESTART   1002
+#define IDC_BTN_CLOSE     1003
 
 typedef struct {
     uint32_t dwId;
@@ -45,6 +51,9 @@ static SOCKET g_sock = INVALID_SOCKET;
 static char g_host[128] = "127.0.0.1";
 static uint16_t g_port = 9000;
 static FILE* g_log = NULL;
+static HWND g_hwndMain = NULL;
+static HWND g_hwndStatus = NULL;
+static UINT_PTR g_reconnectTimer = 0;
 
 static void log_printf(const char* fmt, ...){
     if (!g_log){
@@ -68,6 +77,26 @@ static void log_close(void){
         fprintf(g_log, "--- uipc_bridge stop ---\n");
         fclose(g_log);
         g_log = NULL;
+    }
+}
+
+static void update_status(const wchar_t* msg){
+    if (g_hwndStatus && msg){
+        SetWindowTextW(g_hwndStatus, msg);
+    }
+}
+
+static void stop_reconnect_timer(void){
+    if (g_reconnectTimer && g_hwndMain){
+        KillTimer(g_hwndMain, g_reconnectTimer);
+    }
+    g_reconnectTimer = 0;
+}
+
+static void request_reconnect_timer(void){
+    if (!g_hwndMain) return;
+    if (!g_reconnectTimer){
+        g_reconnectTimer = SetTimer(g_hwndMain, 1, 1000, NULL);
     }
 }
 
@@ -176,6 +205,8 @@ static void close_socket(void){
         closesocket(g_sock);
         g_sock = INVALID_SOCKET;
     }
+    update_status(L"Status: Disconnected - retrying...");
+    request_reconnect_timer();
 }
 
 static BOOL ensure_socket(void){
@@ -198,9 +229,18 @@ static BOOL ensure_socket(void){
     if (connect(s, (struct sockaddr*)&addr, sizeof(addr)) == SOCKET_ERROR){
         log_printf("connect failed err=%ld", WSAGetLastError());
         closesocket(s);
+        wchar_t buf[256];
+        _snwprintf(buf, ARRAYSIZE(buf), L"Status: Connect failed (%S:%u)", g_host, g_port);
+        buf[ARRAYSIZE(buf)-1] = L'\0';
+        update_status(buf);
         return FALSE;
     }
     g_sock = s;
+    stop_reconnect_timer();
+    wchar_t buf[256];
+    _snwprintf(buf, ARRAYSIZE(buf), L"Status: Connected to %S:%u", g_host, g_port);
+    buf[ARRAYSIZE(buf)-1] = L'\0';
+    update_status(buf);
     return TRUE;
 }
 
@@ -385,6 +425,29 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
         PostQuitMessage(0);
         return 0;
     }
+    if (msg == WM_COMMAND){
+        switch (LOWORD(wParam)){
+        case IDC_BTN_CLOSE:
+            PostMessageW(hWnd, WM_CLOSE, 0, 0);
+            return 0;
+        case IDC_BTN_RESTART:
+            log_printf("Restart requested via UI");
+            close_socket();
+            update_status(L"Status: Restarting...");
+            ensure_socket();
+            return 0;
+        default:
+            break;
+        }
+    }
+    if (msg == WM_TIMER){
+        if (wParam == g_reconnectTimer){
+            if (ensure_socket()){
+                stop_reconnect_timer();
+            }
+            return 0;
+        }
+    }
     return DefWindowProc(hWnd, msg, wParam, lParam);
 }
 
@@ -429,9 +492,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     }
 
     HWND hwnd = CreateWindowExW(
-        0, wc.lpszClassName, L"UIPCMAIN",
+        0, wc.lpszClassName, L"wineUIPC Bridge",
         WS_OVERLAPPEDWINDOW,
-        CW_USEDEFAULT, CW_USEDEFAULT, 300, 200,
+        CW_USEDEFAULT, CW_USEDEFAULT, 360, 160,
         NULL, NULL, hInstance, NULL
     );
     if (!hwnd){
@@ -439,6 +502,38 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
         WSACleanup();
         return 1;
     }
+
+    g_hwndMain = hwnd;
+
+    HFONT hFont = (HFONT)GetStockObject(DEFAULT_GUI_FONT);
+    g_hwndStatus = CreateWindowExW(
+        0, L"STATIC", L"Status: Waiting for connection",
+        WS_CHILD | WS_VISIBLE,
+        12, 12, 320, 20,
+        hwnd, (HMENU)(INT_PTR)IDC_STATUS_LABEL, hInstance, NULL
+    );
+    if (g_hwndStatus && hFont){
+        SendMessageW(g_hwndStatus, WM_SETFONT, (WPARAM)hFont, TRUE);
+    }
+    HWND btnRestart = CreateWindowExW(
+        0, L"BUTTON", L"Restart Bridge",
+        WS_CHILD | WS_VISIBLE,
+        12, 44, 140, 28,
+        hwnd, (HMENU)(INT_PTR)IDC_BTN_RESTART, hInstance, NULL
+    );
+    HWND btnClose = CreateWindowExW(
+        0, L"BUTTON", L"Close",
+        WS_CHILD | WS_VISIBLE,
+        180, 44, 90, 28,
+        hwnd, (HMENU)(INT_PTR)IDC_BTN_CLOSE, hInstance, NULL
+    );
+    if (btnRestart && hFont){
+        SendMessageW(btnRestart, WM_SETFONT, (WPARAM)hFont, TRUE);
+    }
+    if (btnClose && hFont){
+        SendMessageW(btnClose, WM_SETFONT, (WPARAM)hFont, TRUE);
+    }
+    update_status(L"Status: Disconnected - waiting for requests...");
 
     ShowWindow(hwnd, SW_SHOWNOACTIVATE);
     UpdateWindow(hwnd);
