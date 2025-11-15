@@ -41,25 +41,6 @@ See `CABIN_SIGNS.md` for the evolving list of cabin-sign datarefs (default + pop
 
 ---
 
-## Versioning & Release Strategy
-
-We follow a SemVer-inspired scheme while the project is in alpha:
-
-| Stage        | Tag format        | Criteria                                                                 |
-|--------------|-------------------|--------------------------------------------------------------------------|
-| Alpha builds | `v0.<minor>.<patch>-alpha.<n>` | Any change that affects functionality or data mappings. Fast cadence. |
-| Beta         | `v0.<minor>.<patch>-beta.<n>`  | Offset coverage frozen, only bug fixes.                                |
-| Stable       | `v1.<minor>.<patch>`           | Full feature set for APL2; braking changes follow SemVer rules.       |
-
-Release checklist:
-
-1. Update `wineUIPC/main.py` and/or `uipc_bridge.c`.
-2. Run regression flight (startup → taxi → flight → landing) and verify `python.txt` contains no unresolved errors.
-3. Update the changelog (see below) and README feature matrix if scope changed.
-4. Tag the repository and attach the built `uipc_bridge.exe` + relevant logs/zips.
-
-A simple `CHANGELOG.md` template (to add later):
-
 ```markdown
 ## [v0.1.0-alpha.1] - 2025-11-10
 ### Added
