@@ -40,6 +40,7 @@ Together they allow Windows-only tooling (APL2, FSUIPC clients, etc.) to operate
 See `CABIN_SIGNS.md` for the evolving list of cabin-sign datarefs (default + popular add-ons).
 
 ---
+## Changelog
 
 ```markdown
 ## [v0.1.0-alpha.1] - 2025-11-10
