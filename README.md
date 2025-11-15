@@ -1,11 +1,11 @@
-# pyUIPC Bridge
+# wineUIPC Bridge
 
 > Alpha-stage toolchain that lets an **FSUIPC client** under Wine like **A Pilot’s Life – Chapter 2** talk to **X-Plane** through a lightweight, Wine-friendly replacement for FSUIPC.
 
 The repository contains two cooperating components:
 
 1. **`uipc_bridge`** – a Windows executable (can be run via Wine/Proton) that exposes the same WM_COPYDATA and shared-memory interface as the legacy FSUIPC DLL. Instead of talking to a real simulator it forwards requests over TCP as JSON.
-2. **`pyUIPC`** – an XPPython3 plugin that runs inside X-Plane, receives the JSON requests, populates FSUIPC-style memory offsets from X-Plane datarefs, and sends the reply block back to the bridge.
+2. **`wineUIPC`** – an XPPython3 plugin that runs inside X-Plane, receives the JSON requests, populates FSUIPC-style memory offsets from X-Plane datarefs, and sends the reply block back to the bridge.
 
 Together they allow Windows-only tooling (APL2, FSUIPC clients, etc.) to operate on Linux/macOS setups without XPUIPC while giving us full control over which offsets are simulated.
 
@@ -53,7 +53,7 @@ We follow a SemVer-inspired scheme while the project is in alpha:
 
 Release checklist:
 
-1. Update `pyUIPC/main.py` and/or `uipc_bridge.c`.
+1. Update `wineUIPC/main.py` and/or `uipc_bridge.c`.
 2. Run regression flight (startup → taxi → flight → landing) and verify `python.txt` contains no unresolved errors.
 3. Update the changelog (see below) and README feature matrix if scope changed.
 4. Tag the repository and attach the built `uipc_bridge.exe` + relevant logs/zips.
@@ -74,14 +74,14 @@ A simple `CHANGELOG.md` template (to add later):
 
 ```
 ┌──────────────────────┐         TCP JSON          ┌──────────────────────┐
-│  Windows client      │  WM_COPYDATA / shared     │  pyUIPC (XPPython3)  │
+│  Windows client      │  WM_COPYDATA / shared     │  wineUIPC (XPPython3)  │
 │  (APL2 via Wine) ───►│  memory → uipc_bridge ───►│  + X-Plane datarefs  │
 └──────────────────────┘                           └──────────────────────┘
 ```
 
 1. APL2 issues normal FSUIPC IPC blocks.
 2. `uipc_bridge` collects the block, encodes it as JSON (`{"cmd":"ipc", ...}`) and forwards it to the Python plugin.
-3. `pyUIPC` snapshots the required datarefs, mutates the IPC buffer per FSUIPC rules, and returns a hexadecimal payload.
+3. `wineUIPC` snapshots the required datarefs, mutates the IPC buffer per FSUIPC rules, and returns a hexadecimal payload.
 4. Replies travel back over TCP and are written into the original shared memory region so the Windows client thinks FSUIPC answered natively.
 
 ---
@@ -90,7 +90,7 @@ A simple `CHANGELOG.md` template (to add later):
 
 1. **Build the bridge (optional):**
    ```bash
-   x86_64-w64-mingw32-gcc -O2 -municode uipc_bridge.c -lws2_32 -o uipc_bridge.exe
+   x86_64-w64-mingw32-gcc -O2 uipc_bridge.c -lws2_32 -lgdi32 -o uipc_bridge.exe
    ```
    (Pre-built binaries live in `uipc_bridge.exe`.)
 
@@ -102,19 +102,19 @@ A simple `CHANGELOG.md` template (to add later):
      ```
    - Reboot the prefix (`wineboot -r`) after the installs.
 
-3. **Install `pyUIPC`:**
-   - Copy `pyUIPC/` to `X-Plane 12/Resources/plugins/PythonPlugins/`.
+3. **Install `wineUIPC`:**
+   - Copy `wineUIPC/` to `X-Plane 12/Resources/plugins/PythonPlugins/`.
    - Ensure XPPython3 is installed and enabled.
 
 4. **Run the stack:**
    - Start X-Plane → verify XPPython3 log shows `xpc_ipc enable`.
-   - Launch `uipc_bridge.exe` via Wine from this repository directory.
+   - Launch `uipc_bridge.exe` via Wine from this repository directory. The window now shows a live connection status plus `Restart Bridge` (forces a reconnect to the plugin) and `Close` buttons.
    - Start APL2; it should detect FSUIPC and show live data.
 
 4. **Logs:**
    - `python.txt` (repo root) is XPPython3’s standard log—use it for crash reports or plugin load errors.
    - `uipc_bridge.log` captures socket/IPC issues on the Windows side.
-   - `pyUIPC.log` (same folder as the plugin) is the plugin’s structured log. Control verbosity via `pyUIPC.cfg`:
+   - `wineUIPC.log` (same folder as the plugin) is the plugin’s structured log. Control verbosity via `wineUIPC.cfg`:
      ```ini
      log_level=0  # 0=off, 1=verbose, 2=debug
      ```
@@ -132,12 +132,12 @@ A simple `CHANGELOG.md` template (to add later):
 - [x] Implement crash indicator (offset 0x0840) using `sim/flightmodel/failures/over_g` + `sim/flightmodel/failures/onground_any`.
 - [ ] Expose wind layers beyond surface (upper/middle) plus turbulence for more realism.
 - [ ] Automate regression flights via replay or scripted XP tools.
-- [ ] Enhance `uipc_bridge` UI: add “Connected” status text and a dedicated “Close/Exit” button that stops the message loop cleanly.
-- [ ] Add a “Restart Bridge” button to `uipc_bridge` to rebind the socket without closing Wine.
+- [x] Enhance `uipc_bridge` UI: add “Connected” status text and a dedicated “Close/Exit” button that stops the message loop cleanly.
+- [x] Add a “Restart Bridge” button to `uipc_bridge` to rebind the socket without closing Wine.
 - [ ] Update simulator identification strings (e.g. replace “P3D” with “X-Plane”) wherever the bridge reports the platform to clients/logs.
 - [ ] Gear offsets (0x060C/0x060E/0x0C30ff) are implemented but still untested in APL2—verify with multiple aircraft.
 - [x] Expand engine telemetry (fuel flow, oil temp/pressure, etc.) beyond the basic offsets already published.
-- [x] Add simple logging configuration (`pyUIPC.cfg` + `pyUIPC.log`) to the documentation once finalised.
+- [x] Add simple logging configuration (`wineUIPC.cfg` + `wineUIPC.log`) to the documentation once finalised.
 
 ---
 
@@ -145,10 +145,10 @@ A simple `CHANGELOG.md` template (to add later):
 
 1. Fork and create a feature branch (`feat/<name>` or `fix/<name>`).
 2. Reproduce your change with X-Plane + APL2 running, then attach:
-   - `pyUIPC.log` (set `log_level=2` before testing for detailed offsets),
+   - `wineUIPC.log` (set `log_level=2` before testing for detailed offsets),
    - screenshots or client behaviour notes if applicable.
 3. Keep Python changes formatted (PEP8-ish), include inline comments for non-obvious dataref mappings, and prefer small dedicated commits per feature.
 
 ---
 
-For questions or debugging help drop the latest `pyUIPC.log` excerpt plus your APL2 symptom into an issue. Happy flying! ✈️
+For questions or debugging help drop the latest `wineUIPC.log` excerpt plus your APL2 symptom into an issue. Happy flying! ✈️

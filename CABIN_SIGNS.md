@@ -5,7 +5,7 @@
 | X-Plane default             | `sim/cockpit2/annunciators/seatbelt_on`               | `sim/cockpit2/annunciators/smoking_on`                | `int` (0/1) annunciator | ✅ Confirmed; preferred source for offsets 0x3414/0x3415. |
 | Generic fallback            | `sim/cockpit2/switches/fasten_seat_belts`             | `sim/cockpit2/switches/no_smoking`                    | `int` (0=Off,1=Auto,2=On) | ✅ Confirmed; used when annunciators are absent (older aircraft/plugins). |
 | Zibo 737-800 (Laminar mod)  | `laminar/B738/toggle_seatbelt_sign`                   | `laminar/B738/toggle_smoking_sign`                    | `int` / bool (0=Off,1=On) | ✅ Polled before default Laminar refs. |
-| Toliss Airbus (A319/A321/A346) | `toliss/apu/pedestal/seat_belts`                   | `toliss/apu/pedestal/no_smoking`                      | `int` (0=Off,1=Auto,2=On) | ✅ Mirrors ISCS pedestal selectors. |
+| Toliss Airbus (A319/A321/A346) | `ckpt/oh/seatbelts/anim`                           | `ckpt/oh/nosmoking/anim`                              | Seatbelt: bool (0/1); No-smoking: int (0/1/2) | ✅ Both lamps tie to the overhead animations. |
 | X-Crafts ERJ / E-Jets       | `XCrafts/ERJ/overhead/seat_belts`                     | `XCrafts/ERJ/overhead/no_smoking`                     | `int` (0=Off,1=Auto,2=On) | ✅ Matches overhead panel states. |
 | FlightFactor A320/A350      | `ff/seatsigns_on`                                     | *(none exposed)*                                      | `int` / bool (0=Off,1=On) | ✅ Seatbelts wired; no published no-smoking dataref yet. |
 
