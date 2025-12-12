@@ -47,11 +47,13 @@ See `CABIN_SIGNS.md` for the evolving list of cabin-sign datarefs (default + pop
 ## Changelog
 
 ```markdown
-## [v0.1.0-alpha.1] - 2025-11-10
+## [v0.1.0-alpha.2] - 2025-11-17
 ### Added
-- Initial public alpha: TCP bridge + IAS/engine data.
+- Fuel/weight mapping (levels, capacities, ZFW/MTOW/gross) for FSUIPC clients.
+- More explicit COM1/COM2 radio logging and encoding to FSUIPC BCD.
 ### Fixed
-- ...
+- COM BCD encoding snapped to FSUIPC’s expected 4-digit format (leading “1” stripped).
+- Fuel level duplication (center tank) removed; correct percent now reported.
 ```
 
 ---
