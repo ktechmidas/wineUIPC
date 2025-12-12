@@ -31,8 +31,12 @@ Together they allow Windows-only tooling (APL2, FSUIPC clients, etc.) to operate
 | Lights & switches           | ✅     | Individual bits plus aggregated mask (0x0D0C). |
 | Flaps / spoilers / gear     | ✅     | Includes spoiler arm and gear ratios. |
 | Engines                     | ✅     | 1–4 engines, combustion + N1/N2 + engine count (0x0AEC). |
+| Fuel & weights              | ✅     | Fuel levels/capacities (0x0B74/0x0B7C/0x0B94/0x0B80/0x0B98) + ZFW/MTOW/gross in lbs (0x3BFC/0x1334/0x30C0). |
 | Transponder                 | ✅     | Squawk at 0x0354, mode mirrored to 0x0B46 and 0x7B91. |
 | Wind & weather              | ✅     | Ambient wind from `sim/weather/aircraft/wind_now_*`, surface layer from `sim/weather/region/wind_*[0]`. |
+| Altimeter / QNH             | ✅     | Both hPa (0x0330) and inHg (0x0332) mirrored from the pilot’s baro setting. |
+| Radios (COM1/COM2)          | ✅     | Active + standby FSUIPC offsets populated from X-Plane’s radio stack. |
+| Electrical (battery/avionics) | ✅   | Master switches mirrored to 0x281C (battery) and 0x2E80 (avionics). |
 | Slew / pause detection      | ⏳     | Pause wired; slew flag still TODO. |
 
 > Limitation: X-Plane does not expose a reliable “has spoilers” flag, so the FSUIPC availability offsets (0x0778/0x078C/0x0794) remain deprecated and are left unset.
@@ -65,6 +69,7 @@ See `CABIN_SIGNS.md` for the evolving list of cabin-sign datarefs (default + pop
 2. `uipc_bridge` collects the block, encodes it as JSON (`{"cmd":"ipc", ...}`) and forwards it to the Python plugin.
 3. `wineUIPC` snapshots the required datarefs, mutates the IPC buffer per FSUIPC rules, and returns a hexadecimal payload.
 4. Replies travel back over TCP and are written into the original shared memory region so the Windows client thinks FSUIPC answered natively.
+5. If ACARS tools expect a livery name, we mirror the active livery string into FSUIPC’s aircraft-name offsets (0x313C/0x3160) with the current X-Plane selection.
 
 ---
 
@@ -112,6 +117,7 @@ See `CABIN_SIGNS.md` for the evolving list of cabin-sign datarefs (default + pop
 - [x] Determine flags for “retractable gear” (0x060C/0x060E) using `sim/aircraft/gear/acf_gear_retract`.
 - [ ] Determine flags/offsets for “flaps available” and “strobes available”. Spoiler availability is currently blocked because no X-Plane dataref exposes a “has spoilers” capability flag.
 - [x] Implement crash indicator (offset 0x0840) using `sim/flightmodel/failures/over_g` + `sim/flightmodel/failures/onground_any`.
+- [x] Fuel/weight mapping (levels/capacities, ZFW, MTOW, gross) for FSUIPC clients.
 - [ ] Expose wind layers beyond surface (upper/middle) plus turbulence for more realism.
 - [ ] Automate regression flights via replay or scripted XP tools.
 - [x] Enhance `uipc_bridge` UI: add “Connected” status text and a dedicated “Close/Exit” button that stops the message loop cleanly.

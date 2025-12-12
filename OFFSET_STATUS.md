@@ -25,9 +25,18 @@
 | 0x060C / 0x060E | 2 | Gear type / retract flag | ✅ Implementiert | `sim/aircraft/gear/acf_gear_retract` |
 | 0x0894, 0x092C, 0x09C4, 0x0A5C + | 2 | Engine combustion / N1 / N2 | ✅ Implementiert | `sim/flightmodel/engine/ENGN_running`, `ENGN_N1_`, `ENGN_N2_` |
 | 0x0AEC | 2 | Engine count | ✅ Implementiert | `sim/aircraft/prop/acf_num_engines` |
-| 0x0B7C / 0x0B94 | 4 | Fuel proxy | ✅ Implementiert | `sim/flightmodel/weight/m_fuel_total` |
-| 0x3414 / 0x3415 | 1 | Seatbelt / No smoking | ✅ Implementiert (prüfen Toliss) | `sim/cockpit2/switches/...` |
+| 0x0B74 / 0x0B7C / 0x0B94 | 4 | Fuel levels (centre/left/right) | ✅ Implementiert | `sim/flightmodel/weight/m_fuel_total` (mirrored) |
+| 0x0B78 / 0x0B80 / 0x0B98 | 4 | Fuel capacities (centre/left/right, gal) | ✅ Implementiert | `sim/aircraft/weight/acf_m_fuel_tot` |
+| 0x0AF4 | 2 | Fuel weight per gallon ×256 | ✅ Implementiert | Fixwert 6.7 lb/gal |
+| 0x3414 / 0x3415 | 1 | Seatbelt / No smoking | ✅ Implementiert (Toliss/XCrafts/Zibo/FlyFactor) | `sim/cockpit2/switches/...`, `laminar/B738/...`, `AirbusFBW/...`, `XCrafts/ERJ/...`, Toliss `ckpt/oh/...`, FF `ff/seatsigns_on` |
 | 0x0E90 / 0x0E92 / 0x0EF0 / 0x0EF2 | 2 | Surface wind speed/dir | ✅ Implementiert | `sim/weather/wind_speed_kt`, `.../wind_direction_degt` |
+| 0x030C | 4 | Landing rate (signed 256×m/s) | ✅ Implementiert | Freeze beim Aufsetzen |
+| 0x0304 / 0x0308 | 4 | Altitude (meters) / heading | ✅ Implementiert | Siehe Snapshot |
+| 0x3324 | 4 | Indicated altitude ft | ✅ Implementiert | `sim/cockpit2/gauges/indicators/altitude_ft_pilot` |
+| 0x0330 / 0x0332 | 2 | QNH hPa / inHg | ✅ Implementiert | `sim/cockpit2/gauges/actuators/barometer_setting_*` |
+| 0x30C0 / 0x30C8 | 8 | Gross weight (lbs) / mass (slugs) | ✅ Implementiert | `sim/flightmodel/weight/m_total` |
+| 0x3BFC | 4 | Zero fuel weight (lbs×256) | ✅ Implementiert | `sim/flightmodel/weight/m_total - m_fuel_total` |
+| 0x1334 | 4 | Max gross weight (lbs×256) | ✅ Implementiert | `sim/aircraft/weight/acf_m_max` |
 | 0x11B8 / 0x11BA | 2 | G-Force | ✅ Implementiert | `sim/flightmodel2/misc/gforce_normal` |
 | 0x0354 | 2 | Transponder squawk | ✅ Implementiert | `sim/cockpit2/radios/actuators/transponder_code` |
 | 0x0B46 / 0x7B91 | 1 | Transponder mode | ✅ Implementiert | `sim/cockpit2/radios/actuators/transponder_mode` |
@@ -37,19 +46,14 @@
 
 | Offset | Größe | Beschreibung | Status | Vorschlag |
 |--------|-------|--------------|--------|-----------|
-| 0x0840 | 2 | Crash indicator | ✅ Implementiert | `sim/flightmodel/failures/over_g` + `sim/flightmodel/failures/onground_any` |
 | 0x0778 / 0x078C / 0x0794 | 4 | Flaps/Spoilers/Strobes available | ⛔ Nicht verfügbar | Keine verlässliche X-Plane-Flags (kein `has spoilers` DataRef) |
-| 0x02A0 | 2 | Magnetic variation | ✅ Implementiert | `sim/flightmodel/position/magnetic_variation` |
 | 0x02CC | 8 | Compass heading | ❌ Offen | `sim/cockpit2/gauges/indicators/heading_electric_deg_mag_pilot` |
-| 0x0330 | 2 | Altimeter (Kollsman) | ❌ Offen | `sim/cockpit2/gauges/actuators/barometer_setting_in_hg_pilot` |
 | 0x05DC | 2 | Slew mode indicator/control | ❌ Offen | `sim/operation/override/override_slew` oder eigener Flag |
 | 0x084C | 2 | Crash/reset flag | ❌ Offen | Zusammen mit 0x0840 testen |
 | 0x0F4Cff | 2 | Upper/mid/lower wind layers | ❌ Offen | `sim/weather/wind_*` Index 1–3 + Altitude fields |
 | 0x0300–0x0338 | … | Flight stage helpers | ❓ Klären | Prüfen, ob APL2 liest |
-| 0x0B80 | 4 | Payload / ZFW | ❌ Offen | `sim/flightmodel/weight/m_fixed`, `m_total` |
 | 0x0898+ (Fuel flow, torque, oil) | 2/4 | Engine telemetry | Optional | `sim/flightmodel/engine/...` |
 | 0x02FA / 0x07xx | 2/4 | Autopilot states | ❌ Offen | `sim/cockpit/autopilot/...` |
 | 0x0848ff | 2 | Landing lights availability etc. | ❓ | Prüfen Relevanz |
-| 0x3414 / 0x3415 | 1 | Seatbelt/NoSmoking (Toliss spezifisch) | ⚠️ Prüfen | Toliss DataRefs (`toliss_airbus/...`) |
 
 Ergänze Zeilen nach Bedarf, speziell wenn neue Offsets in den Kommunikationsblöcken auftauchen.

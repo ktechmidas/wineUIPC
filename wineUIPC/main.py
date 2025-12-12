@@ -70,6 +70,8 @@ FLIGHTLOOP_INTERVAL = 0.01  # 10 ms – genug für zügige Antworten
 MAX_PER_TICK = 100          # Sicherheitslimit
 REPLY_TIMEOUT = 2.0         # Sekunden; Netz-Handler wartet so lange auf das Ergebnis
 MAX_SPOILER_DEFLECTION_DEG = 60.0  # reasonable default for scaling
+FUEL_LBS_PER_GAL = 6.7
+KG_TO_LBS = 2.20462262185
 CABIN_SIGN_SOURCES = {
     "seatbelt": (
         ("laminar/B738/toggle_seatbelt_sign", "bool"),
@@ -85,6 +87,44 @@ CABIN_SIGN_SOURCES = {
         ("XCrafts/ERJ/overhead/no_smoking", "mode"),
         ("sim/cockpit2/annunciators/smoking_on", "bool"),
         ("sim/cockpit2/switches/no_smoking", "mode"),
+    ),
+}
+RADIO_SOURCES = {
+    "com1_active": (
+        ("sim/cockpit2/radios/actuators/com1_frequency_Mhz", 1.0),
+        ("sim/cockpit2/radios/indicators/com1_frequency_Mhz", 1.0),
+        ("sim/cockpit2/radios/actuators/com1_frequency_khz", 0.001),
+        ("sim/cockpit2/radios/indicators/com1_frequency_khz", 0.001),
+        ("sim/cockpit2/radios/actuators/com1_frequency_hz", 1e-6),
+        ("sim/cockpit2/radios/indicators/com1_frequency_hz", 1e-6),
+        ("sim/cockpit/radios/com1_freq_hz", 1e-6),
+    ),
+    "com1_stby": (
+        ("sim/cockpit2/radios/actuators/com1_standby_frequency_Mhz", 1.0),
+        ("sim/cockpit2/radios/indicators/com1_standby_frequency_Mhz", 1.0),
+        ("sim/cockpit2/radios/actuators/com1_standby_frequency_khz", 0.001),
+        ("sim/cockpit2/radios/indicators/com1_standby_frequency_khz", 0.001),
+        ("sim/cockpit2/radios/actuators/com1_standby_frequency_hz", 1e-6),
+        ("sim/cockpit2/radios/indicators/com1_standby_frequency_hz", 1e-6),
+        ("sim/cockpit/radios/com1_stdby_freq_hz", 1e-6),
+    ),
+    "com2_active": (
+        ("sim/cockpit2/radios/actuators/com2_frequency_Mhz", 1.0),
+        ("sim/cockpit2/radios/indicators/com2_frequency_Mhz", 1.0),
+        ("sim/cockpit2/radios/actuators/com2_frequency_khz", 0.001),
+        ("sim/cockpit2/radios/indicators/com2_frequency_khz", 0.001),
+        ("sim/cockpit2/radios/actuators/com2_frequency_hz", 1e-6),
+        ("sim/cockpit2/radios/indicators/com2_frequency_hz", 1e-6),
+        ("sim/cockpit/radios/com2_freq_hz", 1e-6),
+    ),
+    "com2_stby": (
+        ("sim/cockpit2/radios/actuators/com2_standby_frequency_Mhz", 1.0),
+        ("sim/cockpit2/radios/indicators/com2_standby_frequency_Mhz", 1.0),
+        ("sim/cockpit2/radios/actuators/com2_standby_frequency_khz", 0.001),
+        ("sim/cockpit2/radios/indicators/com2_standby_frequency_khz", 0.001),
+        ("sim/cockpit2/radios/actuators/com2_standby_frequency_hz", 1e-6),
+        ("sim/cockpit2/radios/indicators/com2_standby_frequency_hz", 1e-6),
+        ("sim/cockpit/radios/com2_stdby_freq_hz", 1e-6),
     ),
 }
 
@@ -246,6 +286,13 @@ def read_int_fallback(names: Tuple[str, ...], default: int = 0) -> int:
             return xp.getDatai(handle)
     return default
 
+def read_float_fallback(names: Tuple[str, ...], default: float = 0.0) -> float:
+    for name in names:
+        handle = dr(name)
+        if handle is not None:
+            return xp.getDataf(handle)
+    return default
+
 def read_array(name: str, count: int) -> List[float]:
     handle = dr(name)
     if handle is None:
@@ -269,6 +316,17 @@ def read_array_range(name: str, start: int, count: int) -> List[float]:
     buf = [0.0] * count
     xp.getDatavf(handle, buf, start, count)
     return buf
+
+def read_string(name: str, max_len: int = 260) -> str:
+    handle = dr(name)
+    if handle is None:
+        return ""
+    buf = bytearray(max_len)
+    try:
+        xp.getDatab(handle, buf, 0, max_len)
+    except Exception:
+        return ""
+    return buf.rstrip(b"\x00").decode("utf-8", errors="ignore")
 
 def encode_angle32(deg: float) -> int:
     return int(deg * (65536.0 * 65536.0) / 360.0) & 0xFFFFFFFF
@@ -301,6 +359,31 @@ def encode_bcd4(value: int, *, octal: bool = False) -> int:
     if octal:
         digits = [min(d, 7) for d in digits]
     return (digits[0] << 12) | (digits[1] << 8) | (digits[2] << 4) | digits[3]
+
+def encode_com_freq(freq_input: float) -> int:
+    if freq_input <= 0.0:
+        return 0
+    freq_mhz = round(freq_input * 40.0) / 40.0  # snap to 0.025 MHz
+    # FSUIPC stores 4 BCD digits with the leading "1" assumed (e.g. 123.45 -> 0x2345)
+    bcd_number = int(round(freq_mhz * 100.0))
+    if bcd_number >= 10000:
+        bcd_number -= 10000  # strip leading 1
+    bcd_number = max(0, min(bcd_number, 9999))
+    return encode_bcd4(bcd_number)
+
+def write_ascii(offset: int, text: str, size: int) -> None:
+    data = bytearray(size)
+    encoded = (text or "").encode("utf-8", errors="ignore")[:size]
+    data[:len(encoded)] = encoded
+    _write(offset, bytes(data))
+
+def _read_radio_frequency(key: str) -> float:
+    for name, scale in RADIO_SOURCES.get(key, ()):
+        val = read_float_optional(name)
+        if val is None:
+            continue
+        return float(val) * scale
+    return 0.0
 
 LL_SCALE = 10001750.0 * 65536.0 * 65536.0
 LON_SCALE = (65536.0 * 65536.0 * 65536.0 * 65536.0) / 360.0
@@ -336,6 +419,10 @@ def update_snapshot() -> None:
     lat = read_double("sim/flightmodel/position/latitude")
     lon = read_double("sim/flightmodel/position/longitude")
     alt_m = read_double("sim/flightmodel/position/elevation")
+    indicated_alt_ft = read_float_fallback((
+        "sim/cockpit2/gauges/indicators/altitude_ft_pilot",
+        "sim/cockpit/altimeter/indicated-altitude",
+    ), 0.0)
     pitch = read_float("sim/flightmodel/position/theta")
     roll = read_float("sim/flightmodel/position/phi")
     heading_mag = read_float("sim/cockpit/autopilot/heading_mag")
@@ -364,6 +451,7 @@ def update_snapshot() -> None:
     _write_s64(0x0560, enc_lat)
     _write_s64(0x0568, enc_lon)
     _write_s64(0x0570, encode_altitude_m(alt_m))
+    _write_s32(0x3324, int(indicated_alt_ft))
     _write_s32(0x0578, encode_signed_angle32(-pitch))  # FS: + = nose down
     _write_s32(0x057C, encode_signed_angle32(-roll))   # FS: + = bank left
     _write_u32(0x0580, encode_angle32(heading_mag % 360.0))
@@ -526,12 +614,60 @@ def update_snapshot() -> None:
     engine_count = max(1, min(engine_count, len(engine_slots)))
     _write_u16(0x0AEC, engine_count)
 
-    # Fuel (approximate)
-    fuel_total = read_float("sim/flightmodel/weight/m_fuel_total")
-    fuel_pct = clamp(fuel_total / 3000.0, 0.0, 1.0)
-    units = int(fuel_pct * 128.0 * 65536.0)
-    _write_u32(0x0B7C, units)
-    _write_u32(0x0B94, units)
+    # Fuel / Weights
+    fuel_total_kg = max(0.0, read_float("sim/flightmodel/weight/m_fuel_total"))
+    fuel_capacity_kg = read_float_fallback(("sim/aircraft/weight/acf_m_fuel_tot",), 0.0)
+    if fuel_capacity_kg <= 1.0:
+        fuel_capacity_kg = 3000.0  # reasonable default to avoid zero-capacity edge cases
+    fuel_pct = fuel_total_kg / fuel_capacity_kg
+    fuel_pct = clamp(fuel_pct, 0.0, 1.0)
+    fuel_units = int(clamp(fuel_pct, 0.0, 1.0) * 128.0 * 65536.0)
+    _write_u32(0x0B7C, fuel_units)  # left main level
+    _write_u32(0x0B94, fuel_units)  # right main level
+    _write_u32(0x0B74, 0)           # center tank level (unused default)
+    # Capacities in US gallons (distribute evenly across L/R, mirror to center)
+    fuel_capacity_lbs = fuel_capacity_kg * KG_TO_LBS
+    fuel_capacity_gal = fuel_capacity_lbs / FUEL_LBS_PER_GAL if fuel_capacity_lbs > 0.0 else 0.0
+    per_tank_gal = fuel_capacity_gal / 2.0 if fuel_capacity_gal > 0.0 else 0.0
+    cap_u32 = int(max(0.0, min(per_tank_gal, (2**32 - 1))) + 0.5)
+    _write_u32(0x0B80, cap_u32)  # left main capacity
+    _write_u32(0x0B98, cap_u32)  # right main capacity
+    _write_u32(0x0B78, 0)        # center capacity unused by default
+    _write_u16(0x0AF4, int(FUEL_LBS_PER_GAL * 256.0 + 0.5))
+
+    total_mass_kg = max(0.0, read_float("sim/flightmodel/weight/m_total"))
+    empty_mass_kg = read_float_fallback(("sim/aircraft/weight/acf_m_empty",), total_mass_kg - fuel_total_kg)
+    zfw_kg = max(0.0, total_mass_kg - fuel_total_kg)
+    payload_kg = max(0.0, total_mass_kg - fuel_total_kg - empty_mass_kg)
+    max_gross_kg = read_float_fallback(("sim/aircraft/weight/acf_m_max",), 0.0)
+
+    total_lbs = total_mass_kg * KG_TO_LBS
+    zfw_lbs = zfw_kg * KG_TO_LBS
+    payload_lbs = payload_kg * KG_TO_LBS
+    max_gross_lbs = max_gross_kg * KG_TO_LBS if max_gross_kg > 0.0 else 0.0
+
+    _write_f64(0x30C0, total_lbs)  # current loaded weight in lbs (FSUIPC spec)
+    _write_f64(0x30C8, total_lbs / 32.174049 if total_lbs > 0.0 else 0.0)  # mass in slugs
+    zfw_scaled = int(clamp(zfw_lbs, 0.0, (2**32 - 1) / 256.0) * 256.0 + 0.5)
+    _write_u32(0x3BFC, zfw_scaled)
+    if max_gross_lbs > 0.0:
+        _write_u32(0x1334, int(clamp(max_gross_lbs, 0.0, (2**32 - 1) / 256.0) * 256.0 + 0.5))
+
+    log_verbose(
+        "WEIGHTS fuel=%.1fkg(%.1f%%) payload=%.1fkg/%.0flb zfw=%.1fkg/%.0flb gw=%.1fkg/%.0flb max_gw=%.1fkg/%.0flb"
+        % (
+            fuel_total_kg,
+            fuel_pct * 100.0,
+            payload_kg,
+            payload_lbs,
+            zfw_kg,
+            zfw_lbs,
+            total_mass_kg,
+            total_lbs,
+            max_gross_kg,
+            max_gross_lbs,
+        )
+    )
 
     # Cabin signs (best effort)
     seatbelt_mode = _resolve_cabin_sign("seatbelt")
@@ -559,10 +695,63 @@ def update_snapshot() -> None:
     else:
         fs_mode = 4  # ALT
     _write_u8(0x0328, fs_mode)
+    _write_u8(0x0B46, fs_mode)
+    _write_u8(0x7B91, fs_mode)
     if _prev_xpdr_code != encoded_code or _prev_xpdr_mode != fs_mode:
         log_debug(f"XPDR code={xpdr_code:04d} encoded=0x{encoded_code:04X} mode={fs_mode}")
         _prev_xpdr_code = encoded_code
         _prev_xpdr_mode = fs_mode
+
+    # Radios (COM1/COM2 active + standby)
+    com1_active = _read_radio_frequency("com1_active")
+    com1_stby = _read_radio_frequency("com1_stby")
+    com2_active = _read_radio_frequency("com2_active")
+    com2_stby = _read_radio_frequency("com2_stby")
+    com1_active_bcd = encode_com_freq(com1_active)
+    com1_stby_bcd = encode_com_freq(com1_stby)
+    com2_active_bcd = encode_com_freq(com2_active)
+    com2_stby_bcd = encode_com_freq(com2_stby)
+    _write_u16(0x034E, com1_active_bcd)
+    _write_u16(0x311A, com1_stby_bcd)
+    _write_u16(0x3118, com2_active_bcd)
+    _write_u16(0x311C, com2_stby_bcd)
+    log_verbose(
+        "COM RADIOS com1=%.3f(0x%04X)/%.3f(0x%04X) com2=%.3f(0x%04X)/%.3f(0x%04X)"
+        % (
+            com1_active,
+            com1_active_bcd,
+            com1_stby,
+            com1_stby_bcd,
+            com2_active,
+            com2_active_bcd,
+            com2_stby,
+            com2_stby_bcd,
+        )
+    )
+
+    # Avionics master
+    avionics_sources = read_int_array("sim/cockpit2/switches/avionics_power_on", 2)
+    avionics_on = 1 if any(avionics_sources) else read_int("sim/cockpit/electrical/avionics_on")
+    _write_u32(0x2E80, 1 if avionics_on else 0)
+    log_verbose(f"AVIONICS power={avionics_on}")
+
+    # Battery master
+    battery_sources = read_int_array("sim/cockpit2/electrical/battery_on", 4)
+    battery_on = 1 if any(battery_sources) else read_int("sim/cockpit/electrical/battery_on")
+    _write_u32(0x281C, 1 if battery_on else 0)
+    log_verbose(f"BATTERY power={battery_on}")
+
+    # Altimeter / barometer settings
+    baro_inhg = read_float_fallback((
+        "sim/cockpit2/gauges/actuators/barometer_setting_in_hg_pilot",
+        "sim/cockpit/misc/barometer_setting",
+    ), 29.92)
+    baro_hpa = read_float_fallback((
+        "sim/cockpit2/gauges/actuators/barometer_setting_hpa_pilot",
+    ), baro_inhg * 33.8638866667)
+    _write_u16(0x0330, int(clamp(baro_hpa, 0.0, 2000.0) * 16.0 + 0.5))
+    _write_u16(0x0332, int(clamp(baro_inhg, 0.0, 60.0) * 16.0 + 0.5))
+    log_verbose(f"ALTIMETER baro={baro_hpa:.1f} hPa / {baro_inhg:.2f} inHg")
 
     # G-force (normal)
     g_force = clamp(read_float("sim/flightmodel2/misc/gforce_normal"), -8.0, 8.0)
