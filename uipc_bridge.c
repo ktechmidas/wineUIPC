@@ -6,6 +6,7 @@
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <windows.h>
+#include <shellapi.h>
 
 #include <stdint.h>
 #include <stdio.h>
@@ -23,6 +24,8 @@
 #define IDC_STATUS_LABEL  1001
 #define IDC_BTN_RESTART   1002
 #define IDC_BTN_CLOSE     1003
+#define IDC_EDIT_HOST     1004
+#define IDC_EDIT_PORT     1005
 
 typedef struct {
     uint32_t dwId;
@@ -51,19 +54,30 @@ static SOCKET g_sock = INVALID_SOCKET;
 static char g_host[128] = "127.0.0.1";
 static uint16_t g_port = 9000;
 static FILE* g_log = NULL;
+static BOOL g_verbose = FALSE;
 static HWND g_hwndMain = NULL;
 static HWND g_hwndStatus = NULL;
 static UINT_PTR g_reconnectTimer = 0;
+static char g_cfg_path[MAX_PATH] = "uipc_bridge.cfg";
 
 static void log_printf(const char* fmt, ...){
+    if (!g_verbose) return;
     if (!g_log){
         g_log = fopen("uipc_bridge.log", "a");
         if (g_log){
-            fprintf(g_log, "--- uipc_bridge start pid=%lu ---\n", (unsigned long)GetCurrentProcessId());
+            SYSTEMTIME st;
+            GetLocalTime(&st);
+            fprintf(g_log, "%04u-%02u-%02u %02u:%02u:%02u.%03u [INFO] --- uipc_bridge start pid=%lu ---\n",
+                st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond, st.wMilliseconds,
+                (unsigned long)GetCurrentProcessId());
             fflush(g_log);
         }
     }
     if (!g_log) return;
+    SYSTEMTIME st;
+    GetLocalTime(&st);
+    fprintf(g_log, "%04u-%02u-%02u %02u:%02u:%02u.%03u ",
+        st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond, st.wMilliseconds);
     va_list ap;
     va_start(ap, fmt);
     vfprintf(g_log, fmt, ap);
@@ -74,7 +88,10 @@ static void log_printf(const char* fmt, ...){
 
 static void log_close(void){
     if (g_log){
-        fprintf(g_log, "--- uipc_bridge stop ---\n");
+        SYSTEMTIME st;
+        GetLocalTime(&st);
+        fprintf(g_log, "%04u-%02u-%02u %02u:%02u:%02u.%03u [INFO] --- uipc_bridge stop ---\n",
+            st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond, st.wMilliseconds);
         fclose(g_log);
         g_log = NULL;
     }
@@ -111,6 +128,72 @@ static void close_shared_ctx(void){
     }
     g_shared.atom = 0;
     g_shared.length = 0;
+}
+
+static void init_cfg_path(void){
+    char module[MAX_PATH];
+    DWORD got = GetModuleFileNameA(NULL, module, ARRAYSIZE(module));
+    if (!got || got >= ARRAYSIZE(module)){
+        strncpy(g_cfg_path, "uipc_bridge.cfg", ARRAYSIZE(g_cfg_path));
+        g_cfg_path[ARRAYSIZE(g_cfg_path)-1] = '\0';
+        return;
+    }
+    char* slash = strrchr(module, '\\');
+    char* slash2 = strrchr(module, '/');
+    char* sep = slash;
+    if (slash2 && (!sep || slash2 > sep)){
+        sep = slash2;
+    }
+    size_t dir_len = sep ? (size_t)(sep - module + 1) : 0;
+    size_t need = dir_len + strlen("uipc_bridge.cfg") + 1;
+    if (need <= ARRAYSIZE(g_cfg_path)){
+        memcpy(g_cfg_path, module, dir_len);
+        strcpy(g_cfg_path + dir_len, "uipc_bridge.cfg");
+    } else {
+        strncpy(g_cfg_path, "uipc_bridge.cfg", ARRAYSIZE(g_cfg_path));
+        g_cfg_path[ARRAYSIZE(g_cfg_path)-1] = '\0';
+    }
+}
+
+static void load_config(void){
+    FILE* f = fopen(g_cfg_path, "r");
+    if (!f){
+        return;
+    }
+    char line[256];
+    while (fgets(line, sizeof(line), f)){
+        char* nl = strchr(line, '\n');
+        if (nl) *nl = '\0';
+        if (line[0] == '#' || line[0] == '\0'){
+            continue;
+        }
+        char* eq = strchr(line, '=');
+        if (!eq) continue;
+        *eq = '\0';
+        const char* key = line;
+        const char* val = eq + 1;
+        if (_stricmp(key, "host") == 0 && val[0]){
+            strncpy(g_host, val, ARRAYSIZE(g_host));
+            g_host[ARRAYSIZE(g_host)-1] = '\0';
+        } else if (_stricmp(key, "port") == 0){
+            int port = atoi(val);
+            if (port > 0 && port < 65536){
+                g_port = (uint16_t)port;
+            }
+        } else if (_stricmp(key, "verbose") == 0){
+            g_verbose = atoi(val) != 0;
+        }
+    }
+    fclose(f);
+}
+
+static void save_config(void){
+    FILE* f = fopen(g_cfg_path, "w");
+    if (!f){
+        return;
+    }
+    fprintf(f, "host=%s\nport=%u\nverbose=%d\n", g_host, (unsigned)g_port, g_verbose ? 1 : 0);
+    fclose(f);
 }
 
 static BOOL ensure_shared_ctx(ATOM atom){
@@ -233,6 +316,7 @@ static BOOL ensure_socket(void){
         _snwprintf(buf, ARRAYSIZE(buf), L"Status: Connect failed (%S:%u)", g_host, g_port);
         buf[ARRAYSIZE(buf)-1] = L'\0';
         update_status(buf);
+        request_reconnect_timer();
         return FALSE;
     }
     g_sock = s;
@@ -432,6 +516,21 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
             return 0;
         case IDC_BTN_RESTART:
             log_printf("Restart requested via UI");
+            {
+                wchar_t host_w[128];
+                wchar_t port_w[32];
+                if (GetDlgItemTextW(g_hwndMain, IDC_EDIT_HOST, host_w, ARRAYSIZE(host_w)) > 0){
+                    WideCharToMultiByte(CP_UTF8, 0, host_w, -1, g_host, (int)ARRAYSIZE(g_host), NULL, NULL);
+                    g_host[ARRAYSIZE(g_host)-1] = '\0';
+                }
+                if (GetDlgItemTextW(g_hwndMain, IDC_EDIT_PORT, port_w, ARRAYSIZE(port_w)) > 0){
+                    int port = _wtoi(port_w);
+                    if (port > 0 && port < 65536){
+                        g_port = (uint16_t)port;
+                    }
+                }
+                save_config();
+            }
             close_socket();
             update_status(L"Status: Restarting...");
             ensure_socket();
@@ -469,6 +568,30 @@ static void parse_env(void){
 
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow){
     (void)hPrevInstance; (void)lpCmdLine; (void)nCmdShow;
+    int argc = 0;
+    LPWSTR* argv = CommandLineToArgvW(GetCommandLineW(), &argc);
+    init_cfg_path();
+    load_config();
+    parse_env();
+    if (argv){
+        for (int i = 1; i < argc; ++i){
+            if (wcscmp(argv[i], L"--verbose") == 0 || wcscmp(argv[i], L"-v") == 0){
+                g_verbose = TRUE;
+            } else if (wcsncmp(argv[i], L"--host=", 7) == 0){
+                size_t len = wcslen(argv[i] + 7);
+                if (len < sizeof(g_host)){
+                    wcstombs(g_host, argv[i] + 7, sizeof(g_host) - 1);
+                    g_host[sizeof(g_host)-1] = '\0';
+                }
+            } else if (wcsncmp(argv[i], L"--port=", 7) == 0){
+                int port = _wtoi(argv[i] + 7);
+                if (port > 0 && port < 65536){
+                    g_port = (uint16_t)port;
+                }
+            }
+        }
+        LocalFree(argv);
+    }
     atexit(log_close);
     parse_env();
 
@@ -515,16 +638,46 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     if (g_hwndStatus && hFont){
         SendMessageW(g_hwndStatus, WM_SETFONT, (WPARAM)hFont, TRUE);
     }
+    CreateWindowExW(
+        0, L"STATIC", L"Host:",
+        WS_CHILD | WS_VISIBLE,
+        12, 42, 40, 20,
+        hwnd, NULL, hInstance, NULL
+    );
+    HWND editHost = CreateWindowExW(
+        WS_EX_CLIENTEDGE, L"EDIT", L"",
+        WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL,
+        60, 40, 190, 22,
+        hwnd, (HMENU)(INT_PTR)IDC_EDIT_HOST, hInstance, NULL
+    );
+    CreateWindowExW(
+        0, L"STATIC", L"Port:",
+        WS_CHILD | WS_VISIBLE,
+        260, 42, 40, 20,
+        hwnd, NULL, hInstance, NULL
+    );
+    HWND editPort = CreateWindowExW(
+        WS_EX_CLIENTEDGE, L"EDIT", L"",
+        WS_CHILD | WS_VISIBLE | ES_NUMBER | ES_AUTOHSCROLL,
+        305, 40, 40, 22,
+        hwnd, (HMENU)(INT_PTR)IDC_EDIT_PORT, hInstance, NULL
+    );
+    if (editHost && hFont){
+        SendMessageW(editHost, WM_SETFONT, (WPARAM)hFont, TRUE);
+    }
+    if (editPort && hFont){
+        SendMessageW(editPort, WM_SETFONT, (WPARAM)hFont, TRUE);
+    }
     HWND btnRestart = CreateWindowExW(
         0, L"BUTTON", L"Restart Bridge",
         WS_CHILD | WS_VISIBLE,
-        12, 44, 140, 28,
+        12, 76, 140, 28,
         hwnd, (HMENU)(INT_PTR)IDC_BTN_RESTART, hInstance, NULL
     );
     HWND btnClose = CreateWindowExW(
         0, L"BUTTON", L"Close",
         WS_CHILD | WS_VISIBLE,
-        180, 44, 90, 28,
+        180, 76, 90, 28,
         hwnd, (HMENU)(INT_PTR)IDC_BTN_CLOSE, hInstance, NULL
     );
     if (btnRestart && hFont){
@@ -532,6 +685,18 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     }
     if (btnClose && hFont){
         SendMessageW(btnClose, WM_SETFONT, (WPARAM)hFont, TRUE);
+    }
+    wchar_t host_w[128];
+    wchar_t port_w[32];
+    MultiByteToWideChar(CP_UTF8, 0, g_host, -1, host_w, ARRAYSIZE(host_w));
+    _snwprintf(port_w, ARRAYSIZE(port_w), L"%u", (unsigned)g_port);
+    host_w[ARRAYSIZE(host_w)-1] = L'\0';
+    port_w[ARRAYSIZE(port_w)-1] = L'\0';
+    if (editHost){
+        SetWindowTextW(editHost, host_w);
+    }
+    if (editPort){
+        SetWindowTextW(editPort, port_w);
     }
     update_status(L"Status: Disconnected - waiting for requests...");
 

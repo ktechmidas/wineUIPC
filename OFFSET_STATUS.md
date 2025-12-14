@@ -5,6 +5,8 @@
 | Offset | Größe | Beschreibung | Status | Quelle / DataRef(s) |
 |--------|-------|--------------|--------|----------------------|
 | 0x3304–0x3364 | 2–4 | Handshake / FS6IPC IDs | ✅ Implementiert | Feste Werte in `update_snapshot` |
+| 0x0C1A | 2 | Simulation rate ×256 | ✅ Implementiert | `sim/time/sim_speed_actual` Fallback `sim/time/sim_speed`, `sim/time/sim_rate` |
+| 0x31E4 | 4 | Radio altitude (metres ×65536) | ✅ Implementiert | `sim/flightmodel/position/y_agl` |
 | 0x0560 / 0x0568 | 8 | Latitude / Longitude (FS units) | ✅ Implementiert | `sim/flightmodel/position/latitude`, `.../longitude` |
 | 0x0570 | 8 | Altitude (Metres AMSL) | ✅ Implementiert | `sim/flightmodel/position/elevation` |
 | 0x0578 / 0x057C | 4 | Pitch / Bank | ✅ Implementiert | `sim/flightmodel/position/theta`, `phi` |

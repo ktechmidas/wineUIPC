@@ -47,6 +47,17 @@ See `CABIN_SIGNS.md` for the evolving list of cabin-sign datarefs (default + pop
 ## Changelog
 
 ```markdown
+## [v0.1.0-alpha.3] - 2025-12-14
+### Added
+- Radio altitude (AGL) exposed via FSUIPC offset 0x31E4 using X-Plane `y_agl`.
+- Simulation rate mirrored to FSUIPC offset 0x0C1A from X-Plane sim speed datarefs.
+- Bridge CLI gains `-v/--verbose` logging with timestamps; `--host/--port` can override plugin address when needed.
+### Fixed
+- FSUIPC handshake now reports 3.820 (FS2004) for better compatibility with FSAirlines.
+- Gross/zero fuel weight calculation aligned with X-Plane empty/payload/fuel parts; max gross uses `m_max` fallback and is mirrored to both 0x1334 (lbs×256) and 0x1260 (lbs).
+### Known / Testing
+- No automated tests; run manual checks (cold start → taxi → landing) with APL2/FSAirlines. Bridge reconnect and verbose logging still need validation on your setup.
+
 ## [v0.1.0-alpha.2] - 2025-11-17
 ### Added
 - Fuel/weight mapping (levels, capacities, ZFW/MTOW/gross) for FSUIPC clients.

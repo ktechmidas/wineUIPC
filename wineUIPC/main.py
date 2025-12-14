@@ -19,6 +19,7 @@ import threading
 import struct
 import errno
 import time
+import traceback
 from queue import Queue, Empty
 from dataclasses import dataclass
 from typing import Any, Dict, Optional, Tuple, Callable, List
@@ -29,19 +30,44 @@ PLUGIN_DIR = os.path.dirname(__file__)
 CFG_PATH = os.path.join(PLUGIN_DIR, "wineUIPC.cfg")
 LOG_PATH = os.path.join(PLUGIN_DIR, "wineUIPC.log")
 
-LOG_LEVEL = 2
+CFG_DEFAULTS = {
+    "log_level": "2",
+    "host": "127.0.0.1",
+    "port": "9000",
+}
 _LOG_LOCK = threading.Lock()
-try:
-    with open(CFG_PATH, "r") as cfg:
-        for line in cfg:
-            line = line.strip()
-            if not line or line.startswith("#"):
-                continue
-            key, _, value = line.partition("=")
-            if key.strip().lower() == "log_level":
-                LOG_LEVEL = int(value.strip())
-except Exception:
-    LOG_LEVEL = 2
+
+
+def _write_cfg(cfg: Dict[str, str]) -> None:
+    lines = [f"{k}={v}\n" for k, v in cfg.items()]
+    with open(CFG_PATH, "w") as f:
+        f.writelines(lines)
+
+
+def _load_cfg() -> Dict[str, str]:
+    cfg = dict(CFG_DEFAULTS)
+    try:
+        with open(CFG_PATH, "r") as f:
+            for raw in f:
+                line = raw.strip()
+                if not line or line.startswith("#"):
+                    continue
+                key, _, value = line.partition("=")
+                key = key.strip().lower()
+                value = value.strip()
+                if key:
+                    cfg[key] = value
+    except FileNotFoundError:
+        _write_cfg(cfg)
+    except Exception:
+        pass
+    return cfg
+
+
+_CFG = _load_cfg()
+LOG_LEVEL = int(_CFG.get("log_level", CFG_DEFAULTS["log_level"]))
+_CFG_HOST = _CFG.get("host", CFG_DEFAULTS["host"])
+_CFG_PORT = _CFG.get("port", CFG_DEFAULTS["port"])
 
 def _write_log(level: str, message: str) -> None:
     timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
@@ -64,8 +90,17 @@ PLUGIN_SIG  = "de.nicorad.xpc.ipc"
 PLUGIN_DESC = "Opaque IPC bridge for uipc_bridge.exe (Phase 2)"
 
 # ---------- Config ----------
-HOST = os.environ.get("XPC_HOST", "127.0.0.1")
-PORT = int(os.environ.get("XPC_PORT", "9000"))
+HOST = os.environ.get("XPC_HOST", _CFG.get("host", CFG_DEFAULTS["host"]))
+PORT_STR = os.environ.get("XPC_PORT", _CFG.get("port", CFG_DEFAULTS["port"]))
+try:
+    PORT = int(PORT_STR)
+except ValueError:
+    PORT = int(CFG_DEFAULTS["port"])
+_CFG.update({"host": HOST, "port": str(PORT), "log_level": str(LOG_LEVEL)})
+try:
+    _write_cfg(_CFG)
+except Exception:
+    pass
 FLIGHTLOOP_INTERVAL = 0.01  # 10 ms – genug für zügige Antworten
 MAX_PER_TICK = 100          # Sicherheitslimit
 REPLY_TIMEOUT = 2.0         # Sekunden; Netz-Handler wartet so lange auf das Ergebnis
@@ -148,6 +183,9 @@ def bytes_to_hex(b: bytes) -> str:
 def clamp(value: float, lo: float, hi: float) -> float:
     return max(lo, min(hi, value))
 
+def first(seq: List[float], default: float = 0.0) -> float:
+    return seq[0] if seq else default
+
 def _spoiler_deg_to_units(deg: float) -> int:
     ratio = clamp(deg / MAX_SPOILER_DEFLECTION_DEG, 0.0, 1.0)
     return int(ratio * 16383.0)
@@ -189,6 +227,30 @@ class Request:
     result: Optional[Dict[str, Any]] = None
 
 REQ_QUEUE: "Queue[Request]" = Queue()
+_toast_text: Optional[str] = None
+_toast_expires: float = 0.0
+_toast_window: Optional[int] = None
+_toast_draw_registered = False
+
+
+def _show_toast(message: str, seconds: float = 4.0) -> None:
+    global _toast_text, _toast_expires
+    _toast_text = message
+    _toast_expires = time.time() + max(1.0, seconds)
+
+
+def _toast_draw(phase: int, is_before: int, refcon: Any) -> int:
+    global _toast_text, _toast_expires
+    if not _toast_text:
+        return 1
+    if time.time() > _toast_expires:
+        _toast_text = None
+        return 1
+    left, top, right, bottom = xp.getScreenBoundsGlobal()
+    x = left + 20
+    y = top - 40
+    xp.drawString((1.0, 1.0, 0.2), x, y, _toast_text, None, xp.Font_Basic)
+    return 1
 
 # ---------- FSUIPC Memory Model ----------
 
@@ -408,13 +470,20 @@ def metres_to_fs_ground_alt(metres: float) -> Tuple[int, int]:
 
 
 def update_snapshot() -> None:
-    global _prev_xpdr_code, _prev_xpdr_mode, _last_on_ground, _landing_rate_raw, _landing_rate_frozen
+    global _prev_xpdr_code, _prev_xpdr_mode, _last_on_ground, _landing_rate_raw, _landing_rate_frozen, _handshake_logged
     # Handshake Offsets
-    _write_u32(0x3304, 0x19980005)
-    _write_u16(0x3308, 10)
+    # HIWORD = FSUIPC version * 1000 (per FSUIPC spec, BCD), LOWORD = build letter (a=1)
+    # We advertise FSUIPC 3.820a (0x3820, build letter 1) to satisfy APL2 expectations.
+    version_x1000 = 0x3820  # BCD for 3.820
+    build_letter = 1        # 'a'
+    _write_u32(0x3304, (version_x1000 << 16) | build_letter)
+    _write_u16(0x3308, 7)           # report FS2004 to match FSUIPC3 clients
     _write_u16(0x330A, 0xFADE)
     _write_u16(0x333C, 1 << 1)
     mem[0x3364] = 0
+    if not _handshake_logged:
+        log(f"FSUIPC handshake version={version_x1000 >> 12}.{(version_x1000 >> 8) & 0xF}{(version_x1000 >> 4) & 0xF}{version_x1000 & 0xF} build=0x{build_letter:04X} fs_ver=7 raw=0x{(version_x1000 << 16) | build_letter:08X}")
+        _handshake_logged = True
 
     lat = read_double("sim/flightmodel/position/latitude")
     lon = read_double("sim/flightmodel/position/longitude")
@@ -499,6 +568,13 @@ def update_snapshot() -> None:
     coarse, fine = metres_to_fs_ground_alt(ground_alt_m)
     _write_s32(0x0020, coarse)
     _write_int(0x0B4C, fine, 2, signed=True)
+    _write_u32(0x31E4, int(max(0.0, y_agl) * 65536.0 + 0.5))
+
+    sim_rate_actual = read_float_optional("sim/time/sim_speed_actual")
+    if sim_rate_actual is None or sim_rate_actual <= 0.0:
+        sim_rate_actual = read_float_fallback(("sim/time/sim_speed", "sim/time/sim_rate"), 1.0)
+    sim_rate = clamp(sim_rate_actual, 0.1, 64.0)
+    _write_u16(0x0C1A, int(sim_rate * 256.0 + 0.5))
 
     # Lights
     nav_on = 1 if read_int("sim/cockpit2/switches/navigation_lights_on") else 0
@@ -570,12 +646,16 @@ def update_snapshot() -> None:
     deploy_offsets = (0x0C34, 0x0C30, 0x0C38)
     all_down = True
     for idx, off in enumerate(deploy_offsets):
-        ratio = clamp(deploy[idx] if idx < len(deploy) else 0.0, 0.0, 1.0)
+        val = deploy[idx] if idx < len(deploy) else 0.0
+        ratio = clamp(val, 0.0, 1.0)
         if ratio < 0.99:
             all_down = False
         _write_u16(off, int(ratio * 16383.0))
     _write_u16(0x0C3C, 16383 if all_down else 0)
-    log_debug(f"GEAR DEPLOY: mainL={deploy[0]:.2f} mainR={deploy[1]:.2f} nose={deploy[2]:.2f} all_down={all_down}")
+    left = deploy[0] if len(deploy) > 0 else 0.0
+    right = deploy[1] if len(deploy) > 1 else 0.0
+    nose = deploy[2] if len(deploy) > 2 else 0.0
+    log_debug(f"GEAR DEPLOY: mainL={left:.2f} mainR={right:.2f} nose={nose:.2f} all_down={all_down}")
 
     # Engines
     n1 = read_array("sim/flightmodel/engine/ENGN_N1_", 4)
@@ -635,14 +715,22 @@ def update_snapshot() -> None:
     _write_u32(0x0B78, 0)        # center capacity unused by default
     _write_u16(0x0AF4, int(FUEL_LBS_PER_GAL * 256.0 + 0.5))
 
-    total_mass_kg = max(0.0, read_float("sim/flightmodel/weight/m_total"))
-    empty_mass_kg = read_float_fallback(("sim/aircraft/weight/acf_m_empty",), total_mass_kg - fuel_total_kg)
-    zfw_kg = max(0.0, total_mass_kg - fuel_total_kg)
+    empty_mass_kg = max(0.0, read_float_fallback((
+        "sim/flightmodel/weight/m_fixed",
+        "sim/aircraft/weight/acf_m_empty",
+    ), 0.0))
+    total_mass_kg = max(0.0, read_float_optional("sim/flightmodel/weight/m_total") or 0.0)
     payload_kg = max(0.0, total_mass_kg - fuel_total_kg - empty_mass_kg)
-    max_gross_kg = read_float_fallback(("sim/aircraft/weight/acf_m_max",), 0.0)
+    zfw_kg = empty_mass_kg + payload_kg
+    total_mass_kg = zfw_kg + fuel_total_kg
+    max_gross_kg = read_float_fallback((
+        "sim/flightmodel/weight/m_max",
+        "sim/aircraft/weight/acf_m_max",
+    ), 0.0)
 
-    total_lbs = total_mass_kg * KG_TO_LBS
     zfw_lbs = zfw_kg * KG_TO_LBS
+    fuel_lbs = fuel_total_kg * KG_TO_LBS
+    total_lbs = zfw_lbs + fuel_lbs
     payload_lbs = payload_kg * KG_TO_LBS
     max_gross_lbs = max_gross_kg * KG_TO_LBS if max_gross_kg > 0.0 else 0.0
 
@@ -651,7 +739,9 @@ def update_snapshot() -> None:
     zfw_scaled = int(clamp(zfw_lbs, 0.0, (2**32 - 1) / 256.0) * 256.0 + 0.5)
     _write_u32(0x3BFC, zfw_scaled)
     if max_gross_lbs > 0.0:
-        _write_u32(0x1334, int(clamp(max_gross_lbs, 0.0, (2**32 - 1) / 256.0) * 256.0 + 0.5))
+        max_gross_scaled = int(clamp(max_gross_lbs, 0.0, (2**32 - 1) / 256.0) * 256.0 + 0.5)
+        _write_u32(0x1334, max_gross_scaled)
+        _write_f64(0x1260, max_gross_lbs)
 
     log_verbose(
         "WEIGHTS fuel=%.1fkg(%.1f%%) payload=%.1fkg/%.0flb zfw=%.1fkg/%.0flb gw=%.1fkg/%.0flb max_gw=%.1fkg/%.0flb"
@@ -762,16 +852,16 @@ def update_snapshot() -> None:
     # Wind (ambient + surface layer)
     ambient_speed_knots = clamp(read_float("sim/weather/aircraft/wind_now_speed_msc") * 1.943844, 0.0, 65535.0)
     ambient_dir_true = read_float("sim/weather/aircraft/wind_now_direction_degt")
-    if ambient_speed_knots <= 0.1:
-        ambient_speed_knots = clamp(read_array_range("sim/weather/wind_speed_kt", 0, 1)[0], 0.0, 65535.0)
-    if abs(ambient_dir_true) < 0.001:
-        ambient_dir_true = read_array_range("sim/weather/wind_direction_degt", 0, 1)[0]
+    # Deprecated global arrays removed; rely on aircraft + region datarefs only
     _write_u16(0x0E90, int(ambient_speed_knots + 0.5))
     _write_u16(0x0E92, encode_direction16(ambient_dir_true))
 
-    surface_region_speed = read_array_range("sim/weather/region/wind_speed_kt", 0, 1)[0]
-    surface_region_dir = read_array_range("sim/weather/region/wind_direction_degt", 0, 1)[0]
-    surface_region_top_msl = read_array_range("sim/weather/region/wind_altitude_msl_m", 0, 1)[0]
+    surface_region_speed_arr = read_array_range("sim/weather/region/wind_speed_kt", 0, 1)
+    surface_region_dir_arr = read_array_range("sim/weather/region/wind_direction_degt", 0, 1)
+    surface_region_top_arr = read_array_range("sim/weather/region/wind_altitude_msl_m", 0, 1)
+    surface_region_speed = first(surface_region_speed_arr, 0.0)
+    surface_region_dir = first(surface_region_dir_arr, 0.0)
+    surface_region_top_msl = first(surface_region_top_arr, 0.0)
     surface_speed_knots = clamp(surface_region_speed if surface_region_speed > 0.0 else ambient_speed_knots, 0.0, 65535.0)
     surface_dir_true = surface_region_dir if surface_region_dir != 0.0 else ambient_dir_true
     surface_dir_mag = surface_dir_true - mag_var  # convert True → Magnetic (positive variation = East)
@@ -830,6 +920,7 @@ def handle_ipc(dwData: int, payload: bytes) -> Dict[str, Any]:
         reply = parse_ipc_block(block)
     except Exception as exc:
         log(f"parse error: {exc}")
+        log_debug(traceback.format_exc().strip())
         return {"ok": False, "error": str(exc)}
     return {"ok": True, "replyHex": bytes_to_hex(reply), "replyDwData": int(dwData)}
 
@@ -858,6 +949,8 @@ def _flightloop_cb(elapsedSinceLastCall, elapsedTimeSinceLastFlightLoop, counter
             else:
                 req.result = {"ok": False, "error": f"unknown cmd: {cmd}"}
         except Exception as e:
+            log(f"dispatch error: {e}")
+            log_debug(traceback.format_exc().strip())
             req.result = {"ok": False, "error": str(e)}
         finally:
             req.event.set()
@@ -923,6 +1016,7 @@ def _handle_client(conn: socket.socket, addr):
     with conn:
         buf = b""
         log(f"client {addr} connected")
+        _show_toast(f"wineUIPC connected {addr[0]} -> {HOST}:{PORT}")
         try:
             while True:
                 chunk = conn.recv(4096)
@@ -973,18 +1067,28 @@ _prev_xpdr_mode: Optional[int] = None
 _last_on_ground = 0
 _landing_rate_raw = 0
 _landing_rate_frozen = False
+_handshake_logged = False
 
 
 def XPluginStart():
     log(f"start module={__file__}")
-    global _flightloop
+    global _flightloop, _toast_draw_registered
     _flightloop = xp.createFlightLoop(_flightloop_cb)
     xp.scheduleFlightLoop(_flightloop, FLIGHTLOOP_INTERVAL, True)
+    if xp.registerDrawCallback(_toast_draw, xp.Phase_Window, 0, None):
+        _toast_draw_registered = True
     return PLUGIN_NAME, PLUGIN_SIG, PLUGIN_DESC
 
 
 def XPluginStop():
     log("stop")
+    global _toast_draw_registered
+    if _toast_draw_registered:
+        try:
+            xp.unregisterDrawCallback(_toast_draw, xp.Phase_Window, 0, None)
+        except Exception:
+            pass
+        _toast_draw_registered = False
 
 
 def XPluginEnable():
@@ -1002,6 +1106,13 @@ def XPluginEnable():
 def XPluginDisable():
     global _server_socket, _server_thread
     _server_stop.set()
+    global _toast_draw_registered
+    if _toast_draw_registered:
+        try:
+            xp.unregisterDrawCallback(_toast_draw, xp.Phase_Window, 0, None)
+        except Exception:
+            pass
+        _toast_draw_registered = False
     if _server_socket:
         try:
             _server_socket.shutdown(socket.SHUT_RDWR)
