@@ -43,10 +43,39 @@ Together they allow Windows-only tooling (APL2, FSUIPC clients, etc.) to operate
 
 See `CABIN_SIGNS.md` for the evolving list of cabin-sign datarefs (default + popular add-ons).
 
+## Handshake / version mapping
+
+`wineUIPC` lets you pick the advertised simulator and FSUIPC version via `wineUIPC.cfg`:
+
+- `fs_version` → value written to offset `0x3308` (FS version code)
+- `fsuipc_version` → BCD version for offset `0x3304` HIWORD (e.g. `7.505` → `0x7505`)
+- `fsuipc_build_letter` → build letter (blank or `a`-`z`; `a` = 1, etc.)
+
+Environment overrides (quick tests without editing the file): `XPC_FS_VERSION`, `XPC_FSUIPC_VERSION`, `XPC_FSUIPC_BUILD`.
+
+Known working/observed pairs:
+
+| Scenario / client target          | `fs_version` (0x3308) | `fsuipc_version` (0x3304 hiword) | `fsuipc_build_letter` | Notes |
+|-----------------------------------|-----------------------|-----------------------------------|------------------------|-------|
+| MSFS 2024 (observed)              | 14                    | 7.505 (`0x7505`)                  | _(blank)_              | Stable with APL2 on Linux ↔ Wine. |
+| X-Plane 12 + XPUIPC (Windows obs) | 8                     | 5.000 (`0x5000`)                  | h (8)                  | Matches Windows XPUIPC capture. |
+| Prepar3D fallback (alpha1)        | 10                    | 1.998 (`0x1998`)                  | e (5)                  | Legacy combo that worked in alpha1. |
+| FS2004 compatibility              | 7                     | 3.820 (`0x3820`)                  | a (1)                  | For FSUIPC3-era clients. |
+
+If a client is picky about versions, pick the closest match from the table and adjust in `wineUIPC.cfg` (or via the env vars) before starting X-Plane.
+
 ---
 ## Changelog
 
 ```markdown
+## [v0.1.0-alpha.4] - 2025-12-15
+### Added
+- Configurable FSUIPC/FS handshake via `wineUIPC.cfg` (fs_version, fsuipc_version, fsuipc_build_letter) and env overrides (`XPC_FS_VERSION`, `XPC_FSUIPC_VERSION`, `XPC_FSUIPC_BUILD`).
+- Handshake/version mapping table for common client targets (MSFS2024, X-Plane+XPUIPC, P3D fallback, FS2004).
+- Overspeed and stall warning flags now also honor X-Plane annunciators/prefs (`sim/operation/prefs/warn_overspeed`, `sim/cockpit2/annunciators/stall_warning`).
+### Known / Testing
+- Continue manual checks with APL2; MSFS2024/FSUIPC7 profile is the stable default. Other version combos depend on client tolerance.
+
 ## [v0.1.0-alpha.3] - 2025-12-14
 ### Added
 - Radio altitude (AGL) exposed via FSUIPC offset 0x31E4 using X-Plane `y_agl`.

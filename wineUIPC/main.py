@@ -34,6 +34,9 @@ CFG_DEFAULTS = {
     "log_level": "2",
     "host": "127.0.0.1",
     "port": "9000",
+    "fs_version": "14",            # MSFS 2024 code
+    "fsuipc_version": "7.505",     # FSUIPC 7.505 (BCD 0x7505)
+    "fsuipc_build_letter": "",     # optional (a-z)
 }
 _LOG_LOCK = threading.Lock()
 
@@ -69,6 +72,56 @@ LOG_LEVEL = int(_CFG.get("log_level", CFG_DEFAULTS["log_level"]))
 _CFG_HOST = _CFG.get("host", CFG_DEFAULTS["host"])
 _CFG_PORT = _CFG.get("port", CFG_DEFAULTS["port"])
 
+
+def _parse_fsuipc_version_x1000(value: str, default_hex: int) -> int:
+    """
+    Convert version string (e.g. "7.505" or "0x7505") to the BCD int used in 0x3304 HIWORD.
+    """
+    if not value:
+        return default_hex
+    s = value.strip()
+    if not s:
+        return default_hex
+    try:
+        if s.lower().startswith("0x"):
+            return int(s, 16)
+    except Exception:
+        pass
+    digits = "".join(ch for ch in s if ch.isdigit())
+    if not digits:
+        return default_hex
+    digits = digits[:4]
+    try:
+        return int(digits, 16)
+    except Exception:
+        return default_hex
+
+
+def _parse_build_letter(value: str, default_val: int) -> int:
+    """
+    Convert build letter (a-z) or integer to the numeric code expected by offset 0x3304 LOWORD.
+    a=1, b=2, ..., z=26; 0 means none.
+    """
+    if not value:
+        return default_val
+    s = value.strip()
+    if not s:
+        return default_val
+    if len(s) == 1 and s.isalpha():
+        n = ord(s.lower()) - 96
+        if 0 <= n <= 26:
+            return n
+    try:
+        n_int = int(s)
+        return max(0, min(26, n_int))
+    except Exception:
+        return default_val
+
+
+_DEFAULT_FS_VERSION = int(CFG_DEFAULTS["fs_version"])
+_DEFAULT_FSUIPC_X1000 = _parse_fsuipc_version_x1000(CFG_DEFAULTS["fsuipc_version"], 0x7505)
+_DEFAULT_BUILD_LETTER = _parse_build_letter(CFG_DEFAULTS["fsuipc_build_letter"], 0)
+
 def _write_log(level: str, message: str) -> None:
     timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
     line = f"{timestamp} [{level}] {message}\n"
@@ -96,7 +149,38 @@ try:
     PORT = int(PORT_STR)
 except ValueError:
     PORT = int(CFG_DEFAULTS["port"])
-_CFG.update({"host": HOST, "port": str(PORT), "log_level": str(LOG_LEVEL)})
+
+HANDSHAKE_FS_VERSION = _DEFAULT_FS_VERSION
+try:
+    HANDSHAKE_FS_VERSION = int(os.environ.get("XPC_FS_VERSION", _CFG.get("fs_version", CFG_DEFAULTS["fs_version"])))
+except Exception:
+    HANDSHAKE_FS_VERSION = _DEFAULT_FS_VERSION
+
+_HANDSHAKE_FSUIPC_VERSION_STR = os.environ.get(
+    "XPC_FSUIPC_VERSION",
+    _CFG.get("fsuipc_version", CFG_DEFAULTS["fsuipc_version"]),
+)
+HANDSHAKE_FSUIPC_VER_X1000 = _parse_fsuipc_version_x1000(
+    _HANDSHAKE_FSUIPC_VERSION_STR,
+    _DEFAULT_FSUIPC_X1000,
+)
+_HANDSHAKE_BUILD_LETTER_STR = os.environ.get(
+    "XPC_FSUIPC_BUILD",
+    _CFG.get("fsuipc_build_letter", CFG_DEFAULTS["fsuipc_build_letter"]),
+)
+HANDSHAKE_BUILD_LETTER = _parse_build_letter(
+    _HANDSHAKE_BUILD_LETTER_STR,
+    _DEFAULT_BUILD_LETTER,
+)
+
+_CFG.update({
+    "host": HOST,
+    "port": str(PORT),
+    "log_level": str(LOG_LEVEL),
+    "fs_version": str(HANDSHAKE_FS_VERSION),
+    "fsuipc_version": str(_HANDSHAKE_FSUIPC_VERSION_STR or CFG_DEFAULTS["fsuipc_version"]),
+    "fsuipc_build_letter": str(_HANDSHAKE_BUILD_LETTER_STR or CFG_DEFAULTS["fsuipc_build_letter"]),
+})
 try:
     _write_cfg(_CFG)
 except Exception:
@@ -470,16 +554,17 @@ def update_snapshot() -> None:
     global _prev_xpdr_code, _prev_xpdr_mode, _last_on_ground, _landing_rate_raw, _landing_rate_frozen, _handshake_logged
     # Handshake Offsets
     # HIWORD = FSUIPC version * 1000 (per FSUIPC spec, BCD), LOWORD = build letter (a=1)
-    # We advertise FSUIPC 3.820a (0x3820, build letter 1) to satisfy APL2 expectations.
-    version_x1000 = 0x3820  # BCD for 3.820
-    build_letter = 1        # 'a'
+    # Values are configurable via wineUIPC.cfg or XPC_FSUIPC_VERSION / XPC_FSUIPC_BUILD / XPC_FS_VERSION env vars.
+    version_x1000 = HANDSHAKE_FSUIPC_VER_X1000
+    build_letter = HANDSHAKE_BUILD_LETTER
+    fs_version = HANDSHAKE_FS_VERSION
     _write_u32(0x3304, (version_x1000 << 16) | build_letter)
-    _write_u16(0x3308, 7)           # report FS2004 to match FSUIPC3 clients
+    _write_u16(0x3308, fs_version)
     _write_u16(0x330A, 0xFADE)
     _write_u16(0x333C, 1 << 1)
     mem[0x3364] = 0
     if not _handshake_logged:
-        log(f"FSUIPC handshake version={version_x1000 >> 12}.{(version_x1000 >> 8) & 0xF}{(version_x1000 >> 4) & 0xF}{version_x1000 & 0xF} build=0x{build_letter:04X} fs_ver=7 raw=0x{(version_x1000 << 16) | build_letter:08X}")
+        log(f"FSUIPC handshake version={version_x1000 >> 12}.{(version_x1000 >> 8) & 0xF}{(version_x1000 >> 4) & 0xF}{version_x1000 & 0xF} build=0x{build_letter:04X} fs_ver={fs_version} raw=0x{(version_x1000 << 16) | build_letter:08X}")
         _handshake_logged = True
 
     lat = read_double("sim/flightmodel/position/latitude")
@@ -553,9 +638,17 @@ def update_snapshot() -> None:
         )
 
     stall_ratio = clamp(read_float("sim/flightmodel2/misc/stall_warning_ratio"), 0.0, 1.0)
+    stall_annun = read_int_optional("sim/cockpit2/annunciators/stall_warning")
+    stall_flag = 1 if stall_ratio > 0.05 else 0
+    if stall_annun is not None and stall_annun > 0:
+        stall_flag = 1
     overspeed_ratio = clamp(read_float("sim/flightmodel2/misc/overspeed_warning_ratio"), 0.0, 1.0)
-    _write_u8(0x036C, 1 if stall_ratio > 0.05 else 0)
-    _write_u8(0x036D, 1 if overspeed_ratio > 0.05 else 0)
+    _write_u8(0x036C, stall_flag)
+    overspeed_pref = read_int_optional("sim/operation/prefs/warn_overspeed")
+    overspeed_flag = 1 if overspeed_ratio > 0.05 else 0
+    if overspeed_pref is not None and overspeed_pref > 0:
+        overspeed_flag = 1
+    _write_u8(0x036D, overspeed_flag)
 
     paused = 1 if read_int("sim/time/paused") else 0
     _write_u16(0x0262, paused)
