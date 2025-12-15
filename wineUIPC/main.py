@@ -103,7 +103,7 @@ except Exception:
     pass
 FLIGHTLOOP_INTERVAL = 0.01  # 10 ms – genug für zügige Antworten
 MAX_PER_TICK = 100          # Sicherheitslimit
-REPLY_TIMEOUT = 2.0         # Sekunden; Netz-Handler wartet so lange auf das Ergebnis
+REPLY_TIMEOUT = 5.0         # Sekunden; Netz-Handler wartet so lange auf das Ergebnis
 MAX_SPOILER_DEFLECTION_DEG = 60.0  # reasonable default for scaling
 FUEL_LBS_PER_GAL = 6.7
 KG_TO_LBS = 2.20462262185
@@ -126,40 +126,16 @@ CABIN_SIGN_SOURCES = {
 }
 RADIO_SOURCES = {
     "com1_active": (
-        ("sim/cockpit2/radios/actuators/com1_frequency_Mhz", 1.0),
-        ("sim/cockpit2/radios/indicators/com1_frequency_Mhz", 1.0),
-        ("sim/cockpit2/radios/actuators/com1_frequency_khz", 0.001),
-        ("sim/cockpit2/radios/indicators/com1_frequency_khz", 0.001),
-        ("sim/cockpit2/radios/actuators/com1_frequency_hz", 1e-6),
-        ("sim/cockpit2/radios/indicators/com1_frequency_hz", 1e-6),
-        ("sim/cockpit/radios/com1_freq_hz", 1e-6),
+        ("sim/cockpit2/radios/actuators/com1_frequency_hz_833", 0.001),
     ),
     "com1_stby": (
-        ("sim/cockpit2/radios/actuators/com1_standby_frequency_Mhz", 1.0),
-        ("sim/cockpit2/radios/indicators/com1_standby_frequency_Mhz", 1.0),
-        ("sim/cockpit2/radios/actuators/com1_standby_frequency_khz", 0.001),
-        ("sim/cockpit2/radios/indicators/com1_standby_frequency_khz", 0.001),
-        ("sim/cockpit2/radios/actuators/com1_standby_frequency_hz", 1e-6),
-        ("sim/cockpit2/radios/indicators/com1_standby_frequency_hz", 1e-6),
-        ("sim/cockpit/radios/com1_stdby_freq_hz", 1e-6),
+        ("sim/cockpit2/radios/actuators/com1_standby_frequency_hz_833", 0.001),
     ),
     "com2_active": (
-        ("sim/cockpit2/radios/actuators/com2_frequency_Mhz", 1.0),
-        ("sim/cockpit2/radios/indicators/com2_frequency_Mhz", 1.0),
-        ("sim/cockpit2/radios/actuators/com2_frequency_khz", 0.001),
-        ("sim/cockpit2/radios/indicators/com2_frequency_khz", 0.001),
-        ("sim/cockpit2/radios/actuators/com2_frequency_hz", 1e-6),
-        ("sim/cockpit2/radios/indicators/com2_frequency_hz", 1e-6),
-        ("sim/cockpit/radios/com2_freq_hz", 1e-6),
+        ("sim/cockpit2/radios/actuators/com2_frequency_hz_833", 0.001),
     ),
     "com2_stby": (
-        ("sim/cockpit2/radios/actuators/com2_standby_frequency_Mhz", 1.0),
-        ("sim/cockpit2/radios/indicators/com2_standby_frequency_Mhz", 1.0),
-        ("sim/cockpit2/radios/actuators/com2_standby_frequency_khz", 0.001),
-        ("sim/cockpit2/radios/indicators/com2_standby_frequency_khz", 0.001),
-        ("sim/cockpit2/radios/actuators/com2_standby_frequency_hz", 1e-6),
-        ("sim/cockpit2/radios/indicators/com2_standby_frequency_hz", 1e-6),
-        ("sim/cockpit/radios/com2_stdby_freq_hz", 1e-6),
+        ("sim/cockpit2/radios/actuators/com2_standby_frequency_hz_833", 0.001),
     ),
 }
 
@@ -415,6 +391,12 @@ def encode_vs_mps256(mps: float) -> int:
 def encode_direction16(deg: float) -> int:
     return int((deg % 360.0) / 360.0 * 65536.0) & 0xFFFF
 
+def _read_number_optional(name: str) -> Optional[float]:
+    val_int = read_int_optional(name)
+    if val_int is not None:
+        return float(val_int)
+    return read_float_optional(name)
+
 def encode_bcd4(value: int, *, octal: bool = False) -> int:
     clamped = max(0, min(int(value), 9999))
     digits = [int(x) for x in f"{clamped:04d}"]
@@ -425,11 +407,13 @@ def encode_bcd4(value: int, *, octal: bool = False) -> int:
 def encode_com_freq(freq_input: float) -> int:
     if freq_input <= 0.0:
         return 0
-    freq_mhz = round(freq_input * 40.0) / 40.0  # snap to 0.025 MHz
-    # FSUIPC stores 4 BCD digits with the leading "1" assumed (e.g. 123.45 -> 0x2345)
+    # freq_input expected in MHz (e.g. 123.800)
+    freq_mhz = round(freq_input * 40.0) / 40.0  # snap to 0.025 MHz (covers 8.33 too)
+    # FSUIPC stores 4 BCD digits with the leading "1" assumed (e.g. 123.80 -> 0x2380)
     bcd_number = int(round(freq_mhz * 100.0))
+    # Ensure we have 4 digits for BCD (strip leading 1 and clamp)
     if bcd_number >= 10000:
-        bcd_number -= 10000  # strip leading 1
+        bcd_number -= 10000  # strip leading 1 (e.g. 12345 -> 2345)
     bcd_number = max(0, min(bcd_number, 9999))
     return encode_bcd4(bcd_number)
 
@@ -441,11 +425,24 @@ def write_ascii(offset: int, text: str, size: int) -> None:
 
 def _read_radio_frequency(key: str) -> float:
     for name, scale in RADIO_SOURCES.get(key, ()):
-        val = read_float_optional(name)
+        val = _read_number_optional(name)
         if val is None:
             continue
-        return float(val) * scale
+        freq = float(val) * scale
+        if freq > 0.0:
+            return freq
     return 0.0
+
+
+def _read_radio_frequency_debug(key: str) -> Tuple[float, str]:
+    for name, scale in RADIO_SOURCES.get(key, ()):
+        val = _read_number_optional(name)
+        if val is None:
+            continue
+        freq = float(val) * scale
+        if freq > 0.0:
+            return freq, name
+    return 0.0, ""
 
 LL_SCALE = 10001750.0 * 65536.0 * 65536.0
 LON_SCALE = (65536.0 * 65536.0 * 65536.0 * 65536.0) / 360.0
@@ -793,10 +790,10 @@ def update_snapshot() -> None:
         _prev_xpdr_mode = fs_mode
 
     # Radios (COM1/COM2 active + standby)
-    com1_active = _read_radio_frequency("com1_active")
-    com1_stby = _read_radio_frequency("com1_stby")
-    com2_active = _read_radio_frequency("com2_active")
-    com2_stby = _read_radio_frequency("com2_stby")
+    com1_active, src1a = _read_radio_frequency_debug("com1_active")
+    com1_stby, src1s = _read_radio_frequency_debug("com1_stby")
+    com2_active, src2a = _read_radio_frequency_debug("com2_active")
+    com2_stby, src2s = _read_radio_frequency_debug("com2_stby")
     com1_active_bcd = encode_com_freq(com1_active)
     com1_stby_bcd = encode_com_freq(com1_stby)
     com2_active_bcd = encode_com_freq(com2_active)
@@ -817,6 +814,10 @@ def update_snapshot() -> None:
             com2_stby,
             com2_stby_bcd,
         )
+    )
+    log_debug(
+        f"COM SRC com1_act={src1a or 'none'} com1_stby={src1s or 'none'} "
+        f"com2_act={src2a or 'none'} com2_stby={src2s or 'none'}"
     )
 
     # Avionics master
@@ -1052,6 +1053,7 @@ def _process_line(conn: socket.socket, line: bytes) -> None:
     REQ_QUEUE.put(req)
 
     if not ev.wait(timeout=REPLY_TIMEOUT):
+        log(f"ipc timeout cmd={payload.get('cmd')} dwData={payload.get('dwData')} cbData={payload.get('cbData')} keys={list(payload.keys())}")
         _send_line(conn, {"ok": False, "error": "timeout"})
         return
 

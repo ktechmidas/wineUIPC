@@ -404,6 +404,7 @@ static BOOL send_json_request(const uint8_t* data, size_t len, DWORD dwData, DWO
 
     char* line = NULL;
     if (!recv_line(&line)){
+        log_printf("recv_line timeout dwData=%lu cbData=%lu len=%zu", (unsigned long)dwData, (unsigned long)cbData, len);
         return FALSE;
     }
 
