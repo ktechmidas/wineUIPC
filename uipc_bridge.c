@@ -59,11 +59,12 @@ static HWND g_hwndMain = NULL;
 static HWND g_hwndStatus = NULL;
 static UINT_PTR g_reconnectTimer = 0;
 static char g_cfg_path[MAX_PATH] = "uipc_bridge.cfg";
+static char g_log_path[MAX_PATH] = "uipc_bridge.log";
 
 static void log_printf(const char* fmt, ...){
     if (!g_verbose) return;
     if (!g_log){
-        g_log = fopen("uipc_bridge.log", "a");
+        g_log = fopen(g_log_path, "a");
         if (g_log){
             SYSTEMTIME st;
             GetLocalTime(&st);
@@ -135,7 +136,9 @@ static void init_cfg_path(void){
     DWORD got = GetModuleFileNameA(NULL, module, ARRAYSIZE(module));
     if (!got || got >= ARRAYSIZE(module)){
         strncpy(g_cfg_path, "uipc_bridge.cfg", ARRAYSIZE(g_cfg_path));
+        strncpy(g_log_path, "uipc_bridge.log", ARRAYSIZE(g_log_path));
         g_cfg_path[ARRAYSIZE(g_cfg_path)-1] = '\0';
+        g_log_path[ARRAYSIZE(g_log_path)-1] = '\0';
         return;
     }
     char* slash = strrchr(module, '\\');
@@ -145,13 +148,21 @@ static void init_cfg_path(void){
         sep = slash2;
     }
     size_t dir_len = sep ? (size_t)(sep - module + 1) : 0;
-    size_t need = dir_len + strlen("uipc_bridge.cfg") + 1;
-    if (need <= ARRAYSIZE(g_cfg_path)){
+    size_t need_cfg = dir_len + strlen("uipc_bridge.cfg") + 1;
+    size_t need_log = dir_len + strlen("uipc_bridge.log") + 1;
+    if (need_cfg <= ARRAYSIZE(g_cfg_path)){
         memcpy(g_cfg_path, module, dir_len);
         strcpy(g_cfg_path + dir_len, "uipc_bridge.cfg");
     } else {
         strncpy(g_cfg_path, "uipc_bridge.cfg", ARRAYSIZE(g_cfg_path));
         g_cfg_path[ARRAYSIZE(g_cfg_path)-1] = '\0';
+    }
+    if (need_log <= ARRAYSIZE(g_log_path)){
+        memcpy(g_log_path, module, dir_len);
+        strcpy(g_log_path + dir_len, "uipc_bridge.log");
+    } else {
+        strncpy(g_log_path, "uipc_bridge.log", ARRAYSIZE(g_log_path));
+        g_log_path[ARRAYSIZE(g_log_path)-1] = '\0';
     }
 }
 
@@ -182,6 +193,9 @@ static void load_config(void){
             }
         } else if (_stricmp(key, "verbose") == 0){
             g_verbose = atoi(val) != 0;
+        } else if (_stricmp(key, "log_path") == 0 && val[0]){
+            strncpy(g_log_path, val, ARRAYSIZE(g_log_path));
+            g_log_path[ARRAYSIZE(g_log_path)-1] = '\0';
         }
     }
     fclose(f);
@@ -192,7 +206,7 @@ static void save_config(void){
     if (!f){
         return;
     }
-    fprintf(f, "host=%s\nport=%u\nverbose=%d\n", g_host, (unsigned)g_port, g_verbose ? 1 : 0);
+    fprintf(f, "host=%s\nport=%u\nverbose=%d\nlog_path=%s\n", g_host, (unsigned)g_port, g_verbose ? 1 : 0, g_log_path);
     fclose(f);
 }
 
