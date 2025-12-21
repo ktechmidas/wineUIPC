@@ -75,7 +75,7 @@ If a client is picky about versions, pick the closest match from the table and a
 ## Changelog
 
 ```markdown
-## [v0.1.0-alpha.5] - 2025-12-15
+## [v0.1.0-alpha.5] - 2025-12-21
 ### Added
 - Standby altimeter offsets populated: 0x3542 (baro hPa×16) and 0x3544 (standby altitude, feet), with fallback to main altimeter when no copilot dataref exists.
 - Altimeter/baro offset summary in README for main + standby mappings.
