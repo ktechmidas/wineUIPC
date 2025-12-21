@@ -75,6 +75,13 @@ If a client is picky about versions, pick the closest match from the table and a
 ## Changelog
 
 ```markdown
+## [v0.1.0-alpha.5] - 2025-12-15
+### Added
+- Standby altimeter offsets populated: 0x3542 (baro hPa×16) and 0x3544 (standby altitude, feet), with fallback to main altimeter when no copilot dataref exists.
+- Altimeter/baro offset summary in README for main + standby mappings.
+### Known / Testing
+- Validate with clients sensitive to QNH/STD transitions (e.g., FSAirlines) to confirm reduced mismatch between indicated and true altitudes.
+
 ## [v0.1.0-alpha.4] - 2025-12-15
 ### Added
 - Configurable FSUIPC/FS handshake via `wineUIPC.cfg` (fs_version, fsuipc_version, fsuipc_build_letter) and env overrides (`XPC_FS_VERSION`, `XPC_FSUIPC_VERSION`, `XPC_FSUIPC_BUILD`).
