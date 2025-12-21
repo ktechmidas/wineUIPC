@@ -64,7 +64,14 @@ Known working/observed pairs:
 
 If a client is picky about versions, pick the closest match from the table and adjust in `wineUIPC.cfg` (or via the env vars) before starting X-Plane.
 
----
+### Altimeter / baro offsets (FSUIPC layout)
+
+- Main altimeter pressure: `0x0330` (hPa×16), `0x0332` (inHg×16)
+- Main indicated altitude: `0x3324` (feet, per FSUIPC spec)
+- Standby altimeter pressure: `0x3542` (hPa×16) — falls back to main if no copilot dataref
+- Standby indicated altitude: `0x3544` (feet) — falls back to main if no copilot dataref
+
+--- 
 ## Changelog
 
 ```markdown

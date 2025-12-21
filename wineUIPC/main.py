@@ -935,7 +935,24 @@ def update_snapshot() -> None:
     ), baro_inhg * 33.8638866667)
     _write_u16(0x0330, int(clamp(baro_hpa, 0.0, 2000.0) * 16.0 + 0.5))
     _write_u16(0x0332, int(clamp(baro_inhg, 0.0, 60.0) * 16.0 + 0.5))
-    log_verbose(f"ALTIMETER baro={baro_hpa:.1f} hPa / {baro_inhg:.2f} inHg")
+
+    standby_baro_hpa = read_float_optional("sim/cockpit2/gauges/actuators/barometer_setting_hpa_copilot")
+    if standby_baro_hpa is None:
+        standby_baro_hpa = baro_hpa
+    standby_baro_inhg = read_float_optional("sim/cockpit2/gauges/actuators/barometer_setting_in_hg_copilot")
+    if standby_baro_inhg is None:
+        standby_baro_inhg = baro_inhg
+    _write_u16(0x3542, int(clamp(standby_baro_hpa, 0.0, 2000.0) * 16.0 + 0.5))
+
+    standby_alt_ft = read_float_optional("sim/cockpit2/gauges/indicators/altitude_ft_copilot")
+    if standby_alt_ft is None:
+        standby_alt_ft = indicated_alt_ft
+    _write_s32(0x3544, int(standby_alt_ft))
+
+    log_verbose(
+        f"ALTIMETER main={baro_hpa:.1f} hPa/{baro_inhg:.2f} inHg alt={indicated_alt_ft:.0f}ft "
+        f"stdby={standby_baro_hpa:.1f} hPa/{standby_baro_inhg:.2f} inHg alt={standby_alt_ft:.0f}ft"
+    )
 
     # G-force (normal)
     g_force = clamp(read_float("sim/flightmodel2/misc/gforce_normal"), -8.0, 8.0)
