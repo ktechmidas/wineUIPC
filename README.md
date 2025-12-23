@@ -53,6 +53,9 @@ See `CABIN_SIGNS.md` for the evolving list of cabin-sign datarefs (default + pop
 
 Environment overrides (quick tests without editing the file): `XPC_FS_VERSION`, `XPC_FSUIPC_VERSION`, `XPC_FSUIPC_BUILD`.
 
+FSAirlines compatibility mode:
+- Set `fsairlines_compat=1` in `wineUIPC.cfg` (or `XPC_FSAIRLINES_COMPAT=1`) to feed `0x3324` from pressure altitude, avoiding large jumps when switching QNH ↔ STD.
+
 Known working/observed pairs:
 
 | Scenario / client target          | `fs_version` (0x3308) | `fsuipc_version` (0x3304 hiword) | `fsuipc_build_letter` | Notes |
@@ -75,6 +78,13 @@ If a client is picky about versions, pick the closest match from the table and a
 ## Changelog
 
 ```markdown
+## [v0.1.0-alpha.6] - 2025-12-23
+### Added
+- FSAirlines compatibility mode (`fsairlines_compat=1`) to feed 0x3324 from pressure altitude and avoid large jumps on QNH/STD changes.
+- Whiskey compass offset 0x02CC populated (float64 degrees).
+### Docs
+- `OFFSET_STATUS.md` translated to English and updated for the new offsets/flags.
+
 ## [v0.1.0-alpha.5] - 2025-12-21
 ### Added
 - Standby altimeter offsets populated: 0x3542 (baro hPa×16) and 0x3544 (standby altitude, feet), with fallback to main altimeter when no copilot dataref exists.

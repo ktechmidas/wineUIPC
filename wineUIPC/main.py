@@ -37,6 +37,7 @@ CFG_DEFAULTS = {
     "fs_version": "14",            # MSFS 2024 code
     "fsuipc_version": "7.505",     # FSUIPC 7.505 (BCD 0x7505)
     "fsuipc_build_letter": "",     # optional (a-z)
+    "fsairlines_compat": "0",      # 1 = keep 0x3324 stable across QNH/STD
 }
 _LOG_LOCK = threading.Lock()
 
@@ -118,6 +119,19 @@ def _parse_build_letter(value: str, default_val: int) -> int:
         return default_val
 
 
+def _parse_bool(value: str, default_val: bool = False) -> bool:
+    if value is None:
+        return default_val
+    s = str(value).strip().lower()
+    if not s:
+        return default_val
+    if s in ("1", "true", "yes", "on"):
+        return True
+    if s in ("0", "false", "no", "off"):
+        return False
+    return default_val
+
+
 _DEFAULT_FS_VERSION = int(CFG_DEFAULTS["fs_version"])
 _DEFAULT_FSUIPC_X1000 = _parse_fsuipc_version_x1000(CFG_DEFAULTS["fsuipc_version"], 0x7505)
 _DEFAULT_BUILD_LETTER = _parse_build_letter(CFG_DEFAULTS["fsuipc_build_letter"], 0)
@@ -173,6 +187,11 @@ HANDSHAKE_BUILD_LETTER = _parse_build_letter(
     _DEFAULT_BUILD_LETTER,
 )
 
+FSAIRLINES_COMPAT = _parse_bool(
+    os.environ.get("XPC_FSAIRLINES_COMPAT", _CFG.get("fsairlines_compat", CFG_DEFAULTS["fsairlines_compat"])),
+    _parse_bool(CFG_DEFAULTS["fsairlines_compat"], False),
+)
+
 _CFG.update({
     "host": HOST,
     "port": str(PORT),
@@ -180,6 +199,7 @@ _CFG.update({
     "fs_version": str(HANDSHAKE_FS_VERSION),
     "fsuipc_version": str(_HANDSHAKE_FSUIPC_VERSION_STR or CFG_DEFAULTS["fsuipc_version"]),
     "fsuipc_build_letter": str(_HANDSHAKE_BUILD_LETTER_STR or CFG_DEFAULTS["fsuipc_build_letter"]),
+    "fsairlines_compat": "1" if FSAIRLINES_COMPAT else "0",
 })
 try:
     _write_cfg(_CFG)
@@ -574,6 +594,12 @@ def update_snapshot() -> None:
         "sim/cockpit2/gauges/indicators/altitude_ft_pilot",
         "sim/cockpit/altimeter/indicated-altitude",
     ), 0.0)
+    if FSAIRLINES_COMPAT:
+        pressure_alt_ft = read_float_optional("sim/flightmodel/misc/pressure_altitude")
+        if pressure_alt_ft is None:
+            pressure_alt_ft = read_float_optional("sim/flightmodel/position/pressure_altitude")
+        if pressure_alt_ft is not None:
+            indicated_alt_ft = pressure_alt_ft
     pitch = read_float("sim/flightmodel/position/theta")
     roll = read_float("sim/flightmodel/position/phi")
     heading_mag = read_float("sim/cockpit/autopilot/heading_mag")
@@ -606,6 +632,10 @@ def update_snapshot() -> None:
     _write_s32(0x0578, encode_signed_angle32(-pitch))  # FS: + = nose down
     _write_s32(0x057C, encode_signed_angle32(-roll))   # FS: + = bank left
     _write_u32(0x0580, encode_angle32(heading_mag % 360.0))
+    compass_heading = read_float_optional("sim/cockpit2/gauges/indicators/heading_electric_deg_mag_pilot")
+    if compass_heading is None:
+        compass_heading = heading_mag
+    _write_f64(0x02CC, compass_heading % 360.0)
     mag_var = read_float("sim/flightmodel/position/magnetic_variation")
     _write_s16(0x02A0, int(mag_var / 360.0 * 65536.0))
 
