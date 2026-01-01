@@ -217,15 +217,17 @@ CABIN_SIGN_SOURCES = {
         ("AirbusFBW/SeatBeltSignsOn", "bool"),
         ("XCrafts/ERJ/overhead/seat_belts", "mode"),
         ("ff/seatsigns_on", "bool"),
-        ("sim/cockpit2/annunciators/seatbelt_on", "bool"),
+        ("sim/cockpit2/annunciators/fasten_seatbelt", "bool"),
         ("sim/cockpit2/switches/fasten_seat_belts", "mode"),
+        ("sim/cockpit/switches/fasten_seat_belts", "mode"),
     ),
     "nosmoke": (
         ("laminar/B738/toggle_smoking_sign", "bool"),
         ("AirbusFBW/NoSmokingSignsOn", "bool"),
         ("XCrafts/ERJ/overhead/no_smoking", "mode"),
-        ("sim/cockpit2/annunciators/smoking_on", "bool"),
+        ("sim/cockpit2/annunciators/no_smoking", "bool"),
         ("sim/cockpit2/switches/no_smoking", "mode"),
+        ("sim/cockpit/switches/no_smoking", "mode"),
     ),
 }
 RADIO_SOURCES = {
@@ -521,6 +523,27 @@ def encode_com_freq(freq_input: float) -> int:
     bcd_number = max(0, min(bcd_number, 9999))
     return encode_bcd4(bcd_number)
 
+
+def encode_adf_freq(khz: float) -> Tuple[int, int]:
+    if khz <= 0.0:
+        return 0, 0
+    whole = int(khz)
+    thousands = max(0, min(whole // 1000, 255))
+    main_digits = max(0, min(whole % 1000, 999))
+    frac_digit = int(round((khz - whole) * 10.0))
+    frac_digit = max(0, min(frac_digit, 9))
+    main_bcd = encode_bcd4(main_digits)
+    ext = (thousands << 8) | frac_digit
+    return main_bcd, ext
+
+
+def _time_hms_from_seconds(seconds: float) -> Tuple[int, int, int]:
+    total = int(seconds) % 86400
+    hour = total // 3600
+    minute = (total % 3600) // 60
+    second = total % 60
+    return hour, minute, second
+
 def write_ascii(offset: int, text: str, size: int) -> None:
     data = bytearray(size)
     encoded = (text or "").encode("utf-8", errors="ignore")[:size]
@@ -587,19 +610,51 @@ def update_snapshot() -> None:
         log(f"FSUIPC handshake version={version_x1000 >> 12}.{(version_x1000 >> 8) & 0xF}{(version_x1000 >> 4) & 0xF}{version_x1000 & 0xF} build=0x{build_letter:04X} fs_ver={fs_version} raw=0x{(version_x1000 << 16) | build_letter:08X}")
         _handshake_logged = True
 
+    local_time_sec = read_float_optional("sim/time/local_time_sec")
+    zulu_time_sec = read_float_optional("sim/time/zulu_time_sec")
+    if local_time_sec is None:
+        local_time_sec = 0.0
+    if zulu_time_sec is None:
+        zulu_time_sec = 0.0
+    l_hour, l_min, l_sec = _time_hms_from_seconds(local_time_sec)
+    z_hour, z_min, _ = _time_hms_from_seconds(zulu_time_sec)
+    _write_u8(0x0238, l_hour)
+    _write_u8(0x0239, l_min)
+    _write_u8(0x023A, l_sec)
+    _write_u8(0x023B, z_hour)
+    _write_u8(0x023C, z_min)
+
+    local_date_days = read_int_optional("sim/time/local_date_days")
+    if local_date_days is None:
+        day_of_year = time.localtime().tm_yday
+    else:
+        day_of_year = max(1, min(366, int(local_date_days) + 1))
+    _write_u16(0x023E, day_of_year)
+    _write_u16(0x0240, time.localtime().tm_year)
+
+    offset_secs = local_time_sec - zulu_time_sec
+    while offset_secs > 43200:
+        offset_secs -= 86400
+    while offset_secs < -43200:
+        offset_secs += 86400
+    _write_s16(0x0246, int(round(offset_secs / 60.0)))
+
+    frame_period = read_float_optional("sim/time/framerate_period")
+    if frame_period is None or frame_period <= 0.0:
+        frame_period = read_float_optional("sim/operation/misc/frame_rate_period")
+    if frame_period and frame_period > 0.0:
+        fps = 1.0 / frame_period
+        fps_div = int(clamp(32768.0 / max(1.0, fps), 0.0, 65535.0))
+        _write_u16(0x0274, fps_div)
+
     lat = read_double("sim/flightmodel/position/latitude")
     lon = read_double("sim/flightmodel/position/longitude")
     alt_m = read_double("sim/flightmodel/position/elevation")
     indicated_alt_ft = read_float_fallback((
         "sim/cockpit2/gauges/indicators/altitude_ft_pilot",
-        "sim/cockpit/altimeter/indicated-altitude",
+        "sim/flightmodel/misc/h_ind",
     ), 0.0)
-    if FSAIRLINES_COMPAT:
-        pressure_alt_ft = read_float_optional("sim/flightmodel/misc/pressure_altitude")
-        if pressure_alt_ft is None:
-            pressure_alt_ft = read_float_optional("sim/flightmodel/position/pressure_altitude")
-        if pressure_alt_ft is not None:
-            indicated_alt_ft = pressure_alt_ft
+    altimeter_alt_ft = indicated_alt_ft
     pitch = read_float("sim/flightmodel/position/theta")
     roll = read_float("sim/flightmodel/position/phi")
     heading_mag = read_float("sim/cockpit/autopilot/heading_mag")
@@ -615,10 +670,9 @@ def update_snapshot() -> None:
     vs_mps = vs_fpm * 0.00508
     gear_on_ground = read_int_array("sim/flightmodel2/gear/on_ground", 3)
     on_ground_any = any(gear_on_ground)
-    on_ground_main = read_int("sim/flightmodel/parts/on_ground_main")
-    on_ground = 1 if (on_ground_any or on_ground_main) else 0
+    on_ground = 1 if on_ground_any else 0
     failure_onground = 1 if read_int("sim/flightmodel/failures/onground_any") else 0
-    log_debug(f"GROUND: gear={gear_on_ground} main={on_ground_main} -> {on_ground}")
+    log_debug(f"GROUND: gear={gear_on_ground} -> {on_ground}")
     y_agl = read_float("sim/flightmodel/position/y_agl")
 
     enc_lat = encode_latitude(lat)
@@ -628,7 +682,6 @@ def update_snapshot() -> None:
     _write_s64(0x0560, enc_lat)
     _write_s64(0x0568, enc_lon)
     _write_s64(0x0570, encode_altitude_m(alt_m))
-    _write_s32(0x3324, int(indicated_alt_ft))
     _write_s32(0x0578, encode_signed_angle32(-pitch))  # FS: + = nose down
     _write_s32(0x057C, encode_signed_angle32(-roll))   # FS: + = bank left
     _write_u32(0x0580, encode_angle32(heading_mag % 360.0))
@@ -667,17 +720,22 @@ def update_snapshot() -> None:
             f"landing_rate_fpm={landing_rate_fpm:.1f}"
         )
 
-    stall_ratio = clamp(read_float("sim/flightmodel2/misc/stall_warning_ratio"), 0.0, 1.0)
+    stall_ratio = read_float_optional("sim/cockpit2/annunciators/stall_warning_ratio")
     stall_annun = read_int_optional("sim/cockpit2/annunciators/stall_warning")
-    stall_flag = 1 if stall_ratio > 0.05 else 0
+    stall_fail = read_int_optional("sim/flightmodel/failures/stallwarning")
+    stall_flag = 0
+    if stall_ratio is not None:
+        stall_flag = 1 if stall_ratio > 0.05 else 0
     if stall_annun is not None and stall_annun > 0:
         stall_flag = 1
-    overspeed_ratio = clamp(read_float("sim/flightmodel2/misc/overspeed_warning_ratio"), 0.0, 1.0)
+    if stall_fail is not None and stall_fail > 0:
+        stall_flag = 1
     _write_u8(0x036C, stall_flag)
     overspeed_pref = read_int_optional("sim/operation/prefs/warn_overspeed")
-    overspeed_flag = 1 if overspeed_ratio > 0.05 else 0
-    if overspeed_pref is not None and overspeed_pref > 0:
-        overspeed_flag = 1
+    overspeed_vne = read_int_optional("sim/flightmodel/failures/over_vne")
+    overspeed_flag = 1 if (overspeed_vne or 0) > 0 else 0
+    if overspeed_pref is not None and overspeed_pref == 0:
+        overspeed_flag = 0
     _write_u8(0x036D, overspeed_flag)
 
     paused = 1 if read_int("sim/time/paused") else 0
@@ -692,7 +750,7 @@ def update_snapshot() -> None:
 
     sim_rate_actual = read_float_optional("sim/time/sim_speed_actual")
     if sim_rate_actual is None or sim_rate_actual <= 0.0:
-        sim_rate_actual = read_float_fallback(("sim/time/sim_speed", "sim/time/sim_rate"), 1.0)
+        sim_rate_actual = read_float_fallback(("sim/time/sim_speed",), 1.0)
     sim_rate = clamp(sim_rate_actual, 0.1, 64.0)
     _write_u16(0x0C1A, int(sim_rate * 256.0 + 0.5))
 
@@ -702,7 +760,8 @@ def update_snapshot() -> None:
     strobe_on = 1 if read_int("sim/cockpit2/switches/strobe_lights_on") else 0
     landing_on = 1 if read_int("sim/cockpit2/switches/landing_lights_on") else 0
     taxi_on = 1 if read_int("sim/cockpit2/switches/taxi_light_on") else 0
-    panel_ratio = read_float("sim/cockpit2/switches/panel_brightness_ratio_all")
+    panel_ratios = read_array("sim/cockpit2/switches/panel_brightness_ratio", 4)
+    panel_ratio = max(panel_ratios) if panel_ratios else 0.0
     panel_on = 1 if panel_ratio > 0.1 else 0
     _write_u8(0x0280, nav_on)
     _write_u8(0x0281, 1 if (beacon_on or strobe_on) else 0)
@@ -738,12 +797,12 @@ def update_snapshot() -> None:
     _write_u32(0x0BE0, flap_units)
     _write_u32(0x0BE4, flap_units)
     _write_u32(0x0BD0, spoiler_units)
-    spoiler_deflections = read_array("sim/flightmodel2/controls/spoiler_deflection_deg", 20)
-    left_def = _avg_spoiler_deflection(spoiler_deflections, 0, 10)
-    right_def = _avg_spoiler_deflection(spoiler_deflections, 10, 10)
+    left_def = read_float("sim/flightmodel/controls/lsplrdef")
+    right_def = read_float("sim/flightmodel/controls/rsplrdef")
     _write_u32(0x0BD4, _spoiler_deg_to_units(left_def))
     _write_u32(0x0BD8, _spoiler_deg_to_units(right_def))
-    spoiler_arm = 1 if read_int("sim/cockpit2/switches/speedbrake_arm") else 0
+    speedbrake_ratio = read_float("sim/cockpit2/controls/speedbrake_ratio")
+    spoiler_arm = 1 if speedbrake_ratio < 0.0 else 0
     _write_u32(0x0BCC, 4800 if spoiler_arm else 0)
     log_debug(
         f"SPOILERS cmd_ratio={spoiler_ratio:.2f} left_deg={left_def:.1f} "
@@ -762,7 +821,7 @@ def update_snapshot() -> None:
     _write_u16(0x060C, gear_flags)
     _write_u16(0x060E, gear_flags)
     log_verbose(f"GEAR TYPE: retract_ref={has_retract:.1f} fsuipc={gear_flags}")
-    deploy = read_array("sim/flightmodel/parts/gear_deploy", 3)
+    deploy = read_array("sim/flightmodel2/gear/deploy_ratio", 3)
     deploy_offsets = (0x0C34, 0x0C30, 0x0C38)
     all_down = True
     for idx, off in enumerate(deploy_offsets):
@@ -781,9 +840,9 @@ def update_snapshot() -> None:
     n1 = read_array("sim/flightmodel/engine/ENGN_N1_", 4)
     n2 = read_array("sim/flightmodel/engine/ENGN_N2_", 4)
     eng_running = read_int_array("sim/flightmodel/engine/ENGN_running", 4)
-    fuel_flow_gph = read_array("sim/flightmodel/misc/fuel_flow_gph", 4)
-    oil_temp = read_array("sim/flightmodel/engine/ENGN_oilt", 4)
-    oil_press = read_array("sim/flightmodel/engine/oil_pressure_psi", 4)
+    fuel_flow_kg_sec = read_array("sim/cockpit2/engine/indicators/fuel_flow_kg_sec", 4)
+    oil_temp = read_array("sim/cockpit2/engine/indicators/oil_temperature_deg_C", 4)
+    oil_press = read_array("sim/cockpit2/engine/indicators/oil_pressure_psi", 4)
     engine_slots = (
         (0x0894, 0x0896, 0x0898, 0x090A, 0x08B8, 0x08BA),
         (0x092C, 0x092E, 0x0930, 0x0942, 0x0950, 0x0952),
@@ -795,7 +854,7 @@ def update_snapshot() -> None:
         _write_u16(n1_off, 0xFFFF)
         n1_val = n1[idx] if idx < len(n1) else 0.0
         n2_val = n2[idx] if idx < len(n2) else 0.0
-        ff_gph = fuel_flow_gph[idx] if idx < len(fuel_flow_gph) else 0.0
+        ff_kg_sec = fuel_flow_kg_sec[idx] if idx < len(fuel_flow_kg_sec) else 0.0
         temp_c = oil_temp[idx] if idx < len(oil_temp) else 0.0
         press_psi = oil_press[idx] if idx < len(oil_press) else 0.0
         running = eng_running[idx] if idx < len(eng_running) else 0
@@ -804,11 +863,11 @@ def update_snapshot() -> None:
             _write_u16(n1_off, int(clamp(n1_val, 0.0, 110.0) / 100.0 * 16384.0))
         combust = 1 if running else 0
         _write_u16(comb_off, combust)
-        lbs_per_hr = clamp(ff_gph * 6.7, 0.0, 65535.0)
+        lbs_per_hr = clamp(ff_kg_sec * KG_TO_LBS * 3600.0, 0.0, 65535.0)
         _write_u32(ff_off, int(lbs_per_hr))
         _write_u16(oil_temp_off, int(clamp(temp_c * 9.0 / 5.0 + 32.0, -273.0, 999.0) / 140.0 * 16384.0))
         _write_u16(oil_press_off, int(clamp(press_psi, 0.0, 220.0) / 55.0 * 16384.0))
-    engine_count = read_int("sim/aircraft/prop/acf_num_engines")
+    engine_count = read_int("sim/aircraft/engine/acf_num_engines")
     if engine_count <= 0:
         engine_count = len(n1) if n1 else 1
     engine_count = max(1, min(engine_count, len(engine_slots)))
@@ -816,23 +875,114 @@ def update_snapshot() -> None:
 
     # Fuel / Weights
     fuel_total_kg = max(0.0, read_float("sim/flightmodel/weight/m_fuel_total"))
-    fuel_capacity_kg = read_float_fallback(("sim/aircraft/weight/acf_m_fuel_tot",), 0.0)
+    fuel_capacity_lbs = read_float_fallback(("sim/aircraft/weight/acf_m_fuel_tot",), 0.0)
+    fuel_capacity_kg = fuel_capacity_lbs / KG_TO_LBS if fuel_capacity_lbs > 0.0 else 0.0
     if fuel_capacity_kg <= 1.0:
         fuel_capacity_kg = 3000.0  # reasonable default to avoid zero-capacity edge cases
-    fuel_pct = fuel_total_kg / fuel_capacity_kg
+    fuel_pct = fuel_total_kg / fuel_capacity_kg if fuel_capacity_kg > 0.0 else 0.0
     fuel_pct = clamp(fuel_pct, 0.0, 1.0)
-    fuel_units = int(clamp(fuel_pct, 0.0, 1.0) * 128.0 * 65536.0)
-    _write_u32(0x0B7C, fuel_units)  # left main level
-    _write_u32(0x0B94, fuel_units)  # right main level
-    _write_u32(0x0B74, 0)           # center tank level (unused default)
-    # Capacities in US gallons (distribute evenly across L/R, mirror to center)
-    fuel_capacity_lbs = fuel_capacity_kg * KG_TO_LBS
-    fuel_capacity_gal = fuel_capacity_lbs / FUEL_LBS_PER_GAL if fuel_capacity_lbs > 0.0 else 0.0
-    per_tank_gal = fuel_capacity_gal / 2.0 if fuel_capacity_gal > 0.0 else 0.0
-    cap_u32 = int(max(0.0, min(per_tank_gal, (2**32 - 1))) + 0.5)
-    _write_u32(0x0B80, cap_u32)  # left main capacity
-    _write_u32(0x0B98, cap_u32)  # right main capacity
-    _write_u32(0x0B78, 0)        # center capacity unused by default
+
+    fuel_tanks_kg = read_array("sim/flightmodel/weight/m_fuel", 9)
+    fuel_caps_kg = [0.0] * 9
+    has_tank_caps = False
+    has_tank_levels = any(val > 0.0 for val in fuel_tanks_kg)
+
+    if not has_tank_caps:
+        total_levels = sum(max(0.0, v) for v in fuel_tanks_kg)
+        if fuel_capacity_kg > 0.0:
+            if total_levels > 0.0:
+                fuel_caps_kg = [
+                    max(0.0, v) / total_levels * fuel_capacity_kg for v in fuel_tanks_kg
+                ]
+            else:
+                fuel_caps_kg = [0.0] * len(fuel_tanks_kg)
+                fuel_caps_kg[0] = fuel_capacity_kg / 2.0
+                if len(fuel_caps_kg) > 1:
+                    fuel_caps_kg[1] = fuel_capacity_kg / 2.0
+        has_tank_caps = any(val > 0.0 for val in fuel_caps_kg)
+
+    def tank_units(mass_kg: float, cap_kg: float, total_cap_kg: float) -> int:
+        if cap_kg > 0.0:
+            pct = mass_kg / cap_kg
+        elif total_cap_kg > 0.0:
+            pct = mass_kg / total_cap_kg
+        else:
+            pct = 0.0
+        return int(clamp(pct, 0.0, 1.0) * 128.0 * 65536.0)
+
+    def cap_to_gal(cap_kg: float) -> int:
+        if cap_kg <= 0.0:
+            return 0
+        cap_lbs = cap_kg * KG_TO_LBS
+        cap_gal = cap_lbs / FUEL_LBS_PER_GAL
+        return int(max(0.0, min(cap_gal, (2**32 - 1))) + 0.5)
+
+    if has_tank_levels or has_tank_caps:
+        # X-Plane tank order (best effort): 0=L main, 1=R main, 2=L aux, 3=R aux, 4-6=center, 7=L tip, 8=R tip
+        left_main_kg = fuel_tanks_kg[0] if len(fuel_tanks_kg) > 0 else 0.0
+        right_main_kg = fuel_tanks_kg[1] if len(fuel_tanks_kg) > 1 else 0.0
+        left_aux_kg = fuel_tanks_kg[2] if len(fuel_tanks_kg) > 2 else 0.0
+        right_aux_kg = fuel_tanks_kg[3] if len(fuel_tanks_kg) > 3 else 0.0
+        center_kg = sum(fuel_tanks_kg[4:7]) if len(fuel_tanks_kg) > 4 else 0.0
+        left_tip_kg = fuel_tanks_kg[7] if len(fuel_tanks_kg) > 7 else 0.0
+        right_tip_kg = fuel_tanks_kg[8] if len(fuel_tanks_kg) > 8 else 0.0
+
+        left_main_cap = fuel_caps_kg[0] if len(fuel_caps_kg) > 0 else 0.0
+        right_main_cap = fuel_caps_kg[1] if len(fuel_caps_kg) > 1 else 0.0
+        left_aux_cap = fuel_caps_kg[2] if len(fuel_caps_kg) > 2 else 0.0
+        right_aux_cap = fuel_caps_kg[3] if len(fuel_caps_kg) > 3 else 0.0
+        center_cap = sum(fuel_caps_kg[4:7]) if len(fuel_caps_kg) > 4 else 0.0
+        left_tip_cap = fuel_caps_kg[7] if len(fuel_caps_kg) > 7 else 0.0
+        right_tip_cap = fuel_caps_kg[8] if len(fuel_caps_kg) > 8 else 0.0
+
+        _write_u32(0x0B7C, tank_units(left_main_kg, left_main_cap, fuel_capacity_kg))
+        _write_u32(0x0B94, tank_units(right_main_kg, right_main_cap, fuel_capacity_kg))
+        _write_u32(0x0B74, tank_units(center_kg, center_cap, fuel_capacity_kg))
+        _write_u32(0x0B84, tank_units(left_aux_kg, left_aux_cap, fuel_capacity_kg))
+        _write_u32(0x0B9C, tank_units(right_aux_kg, right_aux_cap, fuel_capacity_kg))
+        _write_u32(0x0B8C, tank_units(left_tip_kg, left_tip_cap, fuel_capacity_kg))
+        _write_u32(0x0BA4, tank_units(right_tip_kg, right_tip_cap, fuel_capacity_kg))
+
+        _write_u32(0x0B80, cap_to_gal(left_main_cap))
+        _write_u32(0x0B98, cap_to_gal(right_main_cap))
+        _write_u32(0x0B78, cap_to_gal(center_cap))
+        _write_u32(0x0B88, cap_to_gal(left_aux_cap))
+        _write_u32(0x0BA0, cap_to_gal(right_aux_cap))
+        _write_u32(0x0B90, cap_to_gal(left_tip_cap))
+        _write_u32(0x0BA8, cap_to_gal(right_tip_cap))
+
+        log_verbose(
+            "FUEL TANKS L=%.0fkg R=%.0fkg LA=%.0fkg RA=%.0fkg LT=%.0fkg RT=%.0fkg C=%.0fkg caps L=%.0fkg R=%.0fkg LA=%.0fkg RA=%.0fkg LT=%.0fkg RT=%.0fkg C=%.0fkg"
+            % (
+                left_main_kg,
+                right_main_kg,
+                left_aux_kg,
+                right_aux_kg,
+                left_tip_kg,
+                right_tip_kg,
+                center_kg,
+                left_main_cap,
+                right_main_cap,
+                left_aux_cap,
+                right_aux_cap,
+                left_tip_cap,
+                right_tip_cap,
+                center_cap,
+            )
+        )
+    else:
+        fuel_units = int(clamp(fuel_pct, 0.0, 1.0) * 128.0 * 65536.0)
+        _write_u32(0x0B7C, fuel_units)  # left main level
+        _write_u32(0x0B94, fuel_units)  # right main level
+        _write_u32(0x0B74, 0)           # center tank level (unused default)
+        # Capacities in US gallons (distribute evenly across L/R, mirror to center)
+        fuel_capacity_lbs = fuel_capacity_kg * KG_TO_LBS
+        fuel_capacity_gal = fuel_capacity_lbs / FUEL_LBS_PER_GAL if fuel_capacity_lbs > 0.0 else 0.0
+        per_tank_gal = fuel_capacity_gal / 2.0 if fuel_capacity_gal > 0.0 else 0.0
+        cap_u32 = int(max(0.0, min(per_tank_gal, (2**32 - 1))) + 0.5)
+        _write_u32(0x0B80, cap_u32)  # left main capacity
+        _write_u32(0x0B98, cap_u32)  # right main capacity
+        _write_u32(0x0B78, 0)        # center capacity unused by default
     _write_u16(0x0AF4, int(FUEL_LBS_PER_GAL * 256.0 + 0.5))
 
     empty_mass_kg = max(0.0, read_float_fallback((
@@ -943,6 +1093,69 @@ def update_snapshot() -> None:
         f"com2_act={src2a or 'none'} com2_stby={src2s or 'none'}"
     )
 
+    nav1_hz = _read_number_optional("sim/cockpit/radios/nav1_freq_hz")
+    nav2_hz = _read_number_optional("sim/cockpit/radios/nav2_freq_hz")
+    if nav1_hz is not None:
+        nav1_mhz = float(nav1_hz) / 100.0
+        _write_u16(0x0350, encode_com_freq(nav1_mhz))
+    if nav2_hz is not None:
+        nav2_mhz = float(nav2_hz) / 100.0
+        _write_u16(0x0352, encode_com_freq(nav2_mhz))
+
+    adf1_hz = _read_number_optional("sim/cockpit/radios/adf1_freq_hz")
+    if adf1_hz is not None:
+        adf1_khz = float(adf1_hz) * 10.0
+        adf1_main, adf1_ext = encode_adf_freq(adf1_khz)
+        _write_u16(0x034C, adf1_main)
+        _write_u16(0x0356, adf1_ext)
+
+    adf2_hz = _read_number_optional("sim/cockpit/radios/adf2_freq_hz")
+    if adf2_hz is not None:
+        adf2_khz = float(adf2_hz) * 10.0
+        adf2_main, adf2_ext = encode_adf_freq(adf2_khz)
+        _write_u16(0x02D4, adf2_main)
+        _write_u16(0x02D6, adf2_ext)
+    adf2_dir = read_float_optional("sim/cockpit/radios/adf2_dir_degt")
+    if adf2_dir is not None:
+        rel = ((adf2_dir + 180.0) % 360.0) - 180.0
+        _write_s16(0x02D8, int(rel / 360.0 * 65536.0))
+
+    nav1_dme_nm = read_float_optional("sim/cockpit/radios/nav1_dme_dist_m")
+    if nav1_dme_nm is not None:
+        _write_u16(0x0300, int(clamp(nav1_dme_nm * 10.0, 0.0, 65535.0) + 0.5))
+    nav1_dme_spd = read_float_optional("sim/cockpit/radios/nav1_dme_speed_kts")
+    if nav1_dme_spd is not None:
+        _write_u16(0x0302, int(clamp(nav1_dme_spd * 10.0, 0.0, 65535.0) + 0.5))
+    nav1_dme_time_min = read_float_optional("sim/cockpit/radios/nav1_dme_time_secs")
+    if nav1_dme_time_min is not None:
+        _write_u16(0x0304, int(clamp(nav1_dme_time_min * 60.0 * 10.0, 0.0, 65535.0) + 0.5))
+
+    nav2_dme_nm = read_float_optional("sim/cockpit/radios/nav2_dme_dist_m")
+    if nav2_dme_nm is not None:
+        _write_u16(0x0306, int(clamp(nav2_dme_nm * 10.0, 0.0, 65535.0) + 0.5))
+    nav2_dme_spd = read_float_optional("sim/cockpit/radios/nav2_dme_speed_kts")
+    if nav2_dme_spd is not None:
+        _write_u16(0x0308, int(clamp(nav2_dme_spd * 10.0, 0.0, 65535.0) + 0.5))
+    nav2_dme_time_min = read_float_optional("sim/cockpit/radios/nav2_dme_time_secs")
+    if nav2_dme_time_min is not None:
+        _write_u16(0x030A, int(clamp(nav2_dme_time_min * 60.0 * 10.0, 0.0, 65535.0) + 0.5))
+
+    ap_type = read_int_optional("sim/aircraft/autopilot/preconfigured_ap_type")
+    _write_u32(0x0764, 1 if ap_type and ap_type > 0 else 0)
+
+    ap_alt_ft = read_float_optional("sim/cockpit/autopilot/altitude")
+    if ap_alt_ft is not None:
+        ap_alt_m = ap_alt_ft * 0.3048
+        _write_u32(0x07D4, int(clamp(ap_alt_m, -32768.0, 32767.0) * 65536.0))
+
+    ap_airspeed = read_float_optional("sim/cockpit/autopilot/airspeed")
+    ap_is_mach = read_int_optional("sim/cockpit/autopilot/airspeed_is_mach")
+    if ap_airspeed is not None:
+        if ap_is_mach:
+            _write_u32(0x07E8, int(clamp(ap_airspeed, 0.0, 4.0) * 65536.0))
+        else:
+            _write_u16(0x07E2, int(clamp(ap_airspeed, 0.0, 999.0) + 0.5))
+
     # Avionics master
     avionics_sources = read_int_array("sim/cockpit2/switches/avionics_power_on", 2)
     avionics_on = 1 if any(avionics_sources) else read_int("sim/cockpit/electrical/avionics_on")
@@ -960,27 +1173,33 @@ def update_snapshot() -> None:
         "sim/cockpit2/gauges/actuators/barometer_setting_in_hg_pilot",
         "sim/cockpit/misc/barometer_setting",
     ), 29.92)
-    baro_hpa = read_float_fallback((
-        "sim/cockpit2/gauges/actuators/barometer_setting_hpa_pilot",
-    ), baro_inhg * 33.8638866667)
+    baro_hpa = baro_inhg * 33.8638866667
     _write_u16(0x0330, int(clamp(baro_hpa, 0.0, 2000.0) * 16.0 + 0.5))
     _write_u16(0x0332, int(clamp(baro_inhg, 0.0, 60.0) * 16.0 + 0.5))
 
-    standby_baro_hpa = read_float_optional("sim/cockpit2/gauges/actuators/barometer_setting_hpa_copilot")
-    if standby_baro_hpa is None:
-        standby_baro_hpa = baro_hpa
+    if FSAIRLINES_COMPAT:
+        altimeter_alt_ft = indicated_alt_ft + (29.92 - baro_inhg) * 1000.0
+
+    _write_s32(0x3324, int(altimeter_alt_ft))
+
     standby_baro_inhg = read_float_optional("sim/cockpit2/gauges/actuators/barometer_setting_in_hg_copilot")
     if standby_baro_inhg is None:
+        standby_baro_inhg = read_float_optional("sim/cockpit2/gauges/actuators/barometer_setting_in_hg_stby")
+    if standby_baro_inhg is None:
         standby_baro_inhg = baro_inhg
+    standby_baro_hpa = standby_baro_inhg * 33.8638866667
     _write_u16(0x3542, int(clamp(standby_baro_hpa, 0.0, 2000.0) * 16.0 + 0.5))
 
-    standby_alt_ft = read_float_optional("sim/cockpit2/gauges/indicators/altitude_ft_copilot")
-    if standby_alt_ft is None:
-        standby_alt_ft = indicated_alt_ft
+    if FSAIRLINES_COMPAT:
+        standby_alt_ft = altimeter_alt_ft
+    else:
+        standby_alt_ft = read_float_optional("sim/cockpit2/gauges/indicators/altitude_ft_copilot")
+        if standby_alt_ft is None:
+            standby_alt_ft = altimeter_alt_ft
     _write_s32(0x3544, int(standby_alt_ft))
 
     log_verbose(
-        f"ALTIMETER main={baro_hpa:.1f} hPa/{baro_inhg:.2f} inHg alt={indicated_alt_ft:.0f}ft "
+        f"ALTIMETER main={baro_hpa:.1f} hPa/{baro_inhg:.2f} inHg alt={altimeter_alt_ft:.0f}ft "
         f"stdby={standby_baro_hpa:.1f} hPa/{standby_baro_inhg:.2f} inHg alt={standby_alt_ft:.0f}ft"
     )
 
@@ -997,17 +1216,23 @@ def update_snapshot() -> None:
     _write_u16(0x0E90, int(ambient_speed_knots + 0.5))
     _write_u16(0x0E92, encode_direction16(ambient_dir_true))
 
-    surface_region_speed_arr = read_array_range("sim/weather/region/wind_speed_kt", 0, 1)
+    surface_region_speed_arr = read_array_range("sim/weather/region/wind_speed_msc", 0, 1)
     surface_region_dir_arr = read_array_range("sim/weather/region/wind_direction_degt", 0, 1)
     surface_region_top_arr = read_array_range("sim/weather/region/wind_altitude_msl_m", 0, 1)
+    surface_region_dew_arr = read_array_range("sim/weather/region/dewpoint_deg_c", 0, 1)
     surface_region_speed = first(surface_region_speed_arr, 0.0)
     surface_region_dir = first(surface_region_dir_arr, 0.0)
     surface_region_top_msl = first(surface_region_top_arr, 0.0)
-    surface_speed_knots = clamp(surface_region_speed if surface_region_speed > 0.0 else ambient_speed_knots, 0.0, 65535.0)
+    surface_region_dew_c = first(surface_region_dew_arr, 0.0)
+    surface_region_speed_knots = surface_region_speed * 1.943844
+    surface_speed_knots = clamp(surface_region_speed_knots if surface_region_speed > 0.0 else ambient_speed_knots, 0.0, 65535.0)
     surface_dir_true = surface_region_dir if surface_region_dir != 0.0 else ambient_dir_true
     surface_dir_mag = surface_dir_true - mag_var  # convert True → Magnetic (positive variation = East)
     surface_dir_u16 = encode_direction16(surface_dir_mag)
     surface_ceiling_agl = max(0.0, surface_region_top_msl - ground_alt_m)
+    _write_u16(0x04C8, int(clamp(surface_region_dew_c, -100.0, 100.0) * 256.0))
+    _write_u16(0x04D8, int(surface_speed_knots + 0.5))
+    _write_u16(0x04DA, surface_dir_u16)
     _write_u16(0x0EEE, int(min(surface_ceiling_agl, 65535.0) + 0.5))
     _write_u16(0x0EF0, int(surface_speed_knots + 0.5))
     _write_u16(0x0EF2, surface_dir_u16)

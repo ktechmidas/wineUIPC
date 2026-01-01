@@ -41,7 +41,7 @@ Together they allow Windows-only tooling (APL2, FSUIPC clients, etc.) to operate
 
 > Limitation: X-Plane does not expose a reliable “has spoilers” flag, so the FSUIPC availability offsets (0x0778/0x078C/0x0794) remain deprecated and are left unset.
 
-See `CABIN_SIGNS.md` for the evolving list of cabin-sign datarefs (default + popular add-ons).
+See `CABIN_SIGNS.md` for the evolving list of cabin-sign datarefs (default + popular add-ons). `DataRefs.txt` is the canonical X-Plane 12 dataref list for this project—avoid using refs not present there.
 
 ## Handshake / version mapping
 
@@ -67,6 +67,11 @@ Known working/observed pairs:
 
 If a client is picky about versions, pick the closest match from the table and adjust in `wineUIPC.cfg` (or via the env vars) before starting X-Plane.
 
+XPUIPC handshake offsets observed on Windows (Toliss A319):
+- `0x3304` = `0x50000008` (FSUIPC 5.000, build letter h)
+- `0x3308` = `0x0008` (FS version code)
+- `0x330A` = `0xFADE` (handshake constant)
+
 ### Altimeter / baro offsets (FSUIPC layout)
 
 - Main altimeter pressure: `0x0330` (hPa×16), `0x0332` (inHg×16)
@@ -78,6 +83,15 @@ If a client is picky about versions, pick the closest match from the table and a
 ## Changelog
 
 ```markdown
+## [v0.1.0-alpha.7] - 2026-01-01
+### Added
+- FSAirlines compat: standby altimeter now follows the same pressure-alt value as 0x3324 to avoid STD/QNH jumps.
+- NAV/ADF/DME time-distance offsets (0x0300–0x030A, 0x034C/0x0356, 0x02D4/0x02D6, 0x02D8).
+- Time/date offsets (0x0238–0x0246), frame rate (0x0274), surface dewpoint/wind layer (0x04C8/0x04D8/0x04DA).
+- Autopilot availability/targets (0x0764, 0x07D4, 0x07E2, 0x07E8).
+### Docs
+- OFFSET_STATUS updated for the new mappings.
+
 ## [v0.1.0-alpha.6] - 2025-12-23
 ### Added
 - FSAirlines compatibility mode (`fsairlines_compat=1`) to feed 0x3324 from pressure altitude and avoid large jumps on QNH/STD changes.

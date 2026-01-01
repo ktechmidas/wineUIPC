@@ -15,6 +15,10 @@
 | 0x02BC | 4 | IAS (knots ×128) | ✅ Implemented | `sim/cockpit2/gauges/indicators/airspeed_kts_pilot` |
 | 0x02C4 / 0x02C8 | 4 | Barber pole / Vertical speed | ✅ Implemented | Fixed value (barber pole), `sim/flightmodel/position/vh_ind_fpm` |
 | 0x02CC | 8 | Whiskey compass (deg, float64) | ✅ Implemented | `sim/cockpit2/gauges/indicators/heading_electric_deg_mag_pilot` (fallback `heading_mag`) |
+| 0x02D4 / 0x02D6 | 2 | ADF2 frequency (BCD / extension) | ✅ Implemented | `sim/cockpit/radios/adf2_freq_hz` |
+| 0x02D8 | 2 | ADF2 relative bearing | ✅ Implemented | `sim/cockpit/radios/adf2_dir_degt` |
+| 0x0300 / 0x0302 / 0x0304 | 2 | NAV1 DME dist/speed/time | ✅ Implemented | `sim/cockpit/radios/nav1_dme_dist_m`, `nav1_dme_speed_kts`, `nav1_dme_time_secs` (mins→sec×10) |
+| 0x0306 / 0x0308 / 0x030A | 2 | NAV2 DME dist/speed/time | ✅ Implemented | `sim/cockpit/radios/nav2_dme_dist_m`, `nav2_dme_speed_kts`, `nav2_dme_time_secs` (mins→sec×10) |
 | 0x030C | 4 | Landing rate (signed 256×m/s) | ✅ Implemented | Current vertical speed in flight, frozen on ground transition |
 | 0x0366 / 0x036C / 0x036D | 1 | On ground / Stall / Overspeed | ✅ Implemented | `sim/flightmodel/failures/onground_any`, `sim/flightmodel2/misc/...` |
 | 0x0020 / 0x0B4C | 4 / 2 | Ground altitude | ✅ Implemented | `elevation - y_agl` |
@@ -32,7 +36,9 @@
 | 0x0B78 / 0x0B80 / 0x0B98 | 4 | Fuel capacities (centre/left/right, gal) | ✅ Implemented | `sim/aircraft/weight/acf_m_fuel_tot` |
 | 0x0AF4 | 2 | Fuel weight per gallon ×256 | ✅ Implemented | Fixed value 6.7 lb/gal |
 | 0x3414 / 0x3415 | 1 | Seatbelt / No smoking | ✅ Implemented (Toliss/XCrafts/Zibo/FlyFactor) | `sim/cockpit2/switches/...`, `laminar/B738/...`, `AirbusFBW/...`, `XCrafts/ERJ/...`, Toliss `ckpt/oh/...`, FF `ff/seatsigns_on` |
-| 0x0E90 / 0x0E92 / 0x0EF0 / 0x0EF2 | 2 | Surface wind speed/dir | ✅ Implemented | `sim/weather/wind_speed_kt`, `.../wind_direction_degt` |
+| 0x0E90 / 0x0E92 / 0x0EF0 / 0x0EF2 | 2 | Surface wind speed/dir | ✅ Implemented | `sim/weather/region/wind_speed_msc`, `.../wind_direction_degt` |
+| 0x04C8 | 2 | Surface dew point (C ×256) | ✅ Implemented | `sim/weather/region/dewpoint_deg_c` |
+| 0x04D8 / 0x04DA | 2 | Surface wind speed/dir (layer) | ✅ Implemented | `sim/weather/region/wind_speed_msc`, `.../wind_direction_degt` |
 | 0x030C | 4 | Landing rate (signed 256×m/s) | ✅ Implemented | Frozen on touchdown |
 | 0x0304 / 0x0308 | 4 | Altitude (meters) / heading | ✅ Implemented | See snapshot |
 | 0x3324 | 4 | Indicated altitude ft | ✅ Implemented | `sim/cockpit2/gauges/indicators/altitude_ft_pilot` (FSAirlines compat: pressure altitude) |
@@ -43,8 +49,18 @@
 | 0x1334 | 4 | Max gross weight (lbs×256) | ✅ Implemented | `sim/aircraft/weight/acf_m_max` |
 | 0x11B8 / 0x11BA | 2 | G-Force | ✅ Implemented | `sim/flightmodel2/misc/gforce_normal` |
 | 0x0354 | 2 | Transponder squawk | ✅ Implemented | `sim/cockpit2/radios/actuators/transponder_code` |
+| 0x034C / 0x0356 | 2 | ADF1 frequency (BCD / extension) | ✅ Implemented | `sim/cockpit/radios/adf1_freq_hz` |
+| 0x0350 / 0x0352 | 2 | NAV1/NAV2 frequency (BCD) | ✅ Implemented | `sim/cockpit/radios/nav1_freq_hz`, `nav2_freq_hz` |
+| 0x0764 | 4 | Autopilot available | ✅ Implemented | `sim/aircraft/autopilot/preconfigured_ap_type` |
+| 0x07D4 | 4 | Autopilot altitude value (meters ×65536) | ✅ Implemented | `sim/cockpit/autopilot/altitude` |
+| 0x07E2 | 2 | Autopilot airspeed value (knots) | ✅ Implemented | `sim/cockpit/autopilot/airspeed` (if not Mach) |
+| 0x07E8 | 4 | Autopilot mach value (Mach ×65536) | ✅ Implemented | `sim/cockpit/autopilot/airspeed_is_mach` + airspeed |
 | 0x0B46 / 0x7B91 | 1 | Transponder mode | ✅ Implemented | `sim/cockpit2/radios/actuators/transponder_mode` |
 | 0x0262 / 0x0264 | 2 | Pause control/indicator | ✅ Implemented | `sim/time/paused` |
+| 0x0238–0x023C | 1 | Local/Zulu time (H/M/S) | ✅ Implemented | `sim/time/local_time_sec`, `sim/time/zulu_time_sec` |
+| 0x023E / 0x0240 | 2 | Day of year / Year | ✅ Implemented | `sim/time/local_date_days` |
+| 0x0246 | 2 | Local time offset (minutes) | ✅ Implemented | Derived from local/zulu time secs |
+| 0x0274 | 2 | Frame rate scalar (32768 / FPS) | ✅ Implemented | `sim/time/framerate_period` fallback `sim/operation/misc/frame_rate_period` |
 
 ## Open Offsets / TODO
 
