@@ -61,6 +61,8 @@ static UINT_PTR g_reconnectTimer = 0;
 static char g_cfg_path[MAX_PATH] = "uipc_bridge.cfg";
 static char g_log_path[MAX_PATH] = "uipc_bridge.log";
 
+static BOOL ensure_socket(void);
+
 static void log_printf(const char* fmt, ...){
     if (!g_verbose) return;
     if (!g_log){
@@ -299,11 +301,23 @@ static BOOL hex_decode(const char* hex, uint8_t* out, size_t out_cap, size_t* ou
 
 static void close_socket(void){
     if (g_sock != INVALID_SOCKET){
+        shutdown(g_sock, SD_BOTH);
         closesocket(g_sock);
         g_sock = INVALID_SOCKET;
     }
     update_status(L"Status: Disconnected - retrying...");
     request_reconnect_timer();
+}
+
+static void force_reconnect(void){
+    close_shared_ctx();
+    if (g_sock != INVALID_SOCKET){
+        shutdown(g_sock, SD_BOTH);
+        closesocket(g_sock);
+        g_sock = INVALID_SOCKET;
+    }
+    update_status(L"Status: Reconnecting...");
+    ensure_socket();
 }
 
 static BOOL ensure_socket(void){
@@ -546,9 +560,7 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
                 }
                 save_config();
             }
-            close_socket();
-            update_status(L"Status: Restarting...");
-            ensure_socket();
+            force_reconnect();
             return 0;
         default:
             break;

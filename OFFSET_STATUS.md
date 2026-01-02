@@ -1,5 +1,7 @@
 # FSUIPC Offset Status
 
+Note: A 32-bit bridge build is available as `uipc_bridge_32.exe` for 32-bit Wine prefixes.
+
 ## Covered Offsets
 
 | Offset | Size | Description | Status | Source / DataRef(s) |

@@ -83,6 +83,12 @@ XPUIPC handshake offsets observed on Windows (Toliss A319):
 ## Changelog
 
 ```markdown
+## [wineUIPC_v0.1.0-alpha.8] - 2026-01-02
+### Fixed
+- Restart Bridge now forces a full reconnect (socket teardown + shared-memory reset) so the UI can recover after aircraft/time/airport changes.
+### Added
+- Documented 32-bit bridge build for 32-bit Wine prefixes.
+
 ## [v0.1.0-alpha.7] - 2026-01-01
 ### Added
 - FSAirlines compat: standby altimeter now follows the same pressure-alt value as 0x3324 to avoid STD/QNH jumps.
@@ -159,10 +165,14 @@ XPUIPC handshake offsets observed on Windows (Toliss A319):
    ```bash
    x86_64-w64-mingw32-gcc -O2 uipc_bridge.c -lws2_32 -lgdi32 -o uipc_bridge.exe
    ```
+   For 32-bit Wine prefixes:
+   ```bash
+   i686-w64-mingw32-gcc -O2 uipc_bridge.c -lws2_32 -lgdi32 -o uipc_bridge_32.exe
+   ```
    (Pre-built binaries live in `uipc_bridge.exe`.)
 
 2. **Prepare Wine for `uipc_bridge`:**
-   - Use a clean 64-bit wineprefix.
+   - Use a clean 64-bit wineprefix (or a 32-bit prefix if running `uipc_bridge_32.exe`).
    - Install the required .NET runtimes and fonts (e.g. via `winetricks`):
      ```
      winetricks dotnet35 dotnet40 dotnet45 dotnet46 dotnet461 dotnet462 dotnet471 dotnet48 dotnet7 allfonts
