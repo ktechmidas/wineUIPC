@@ -207,7 +207,7 @@ except Exception:
     pass
 FLIGHTLOOP_INTERVAL = 0.01  # 10 ms – genug für zügige Antworten
 MAX_PER_TICK = 100          # Sicherheitslimit
-REPLY_TIMEOUT = 5.0         # Sekunden; Netz-Handler wartet so lange auf das Ergebnis
+REPLY_TIMEOUT = 10.0        # Sekunden; Netz-Handler wartet so lange auf das Ergebnis
 MAX_SPOILER_DEFLECTION_DEG = 60.0  # reasonable default for scaling
 FUEL_LBS_PER_GAL = 6.7
 KG_TO_LBS = 2.20462262185
@@ -464,13 +464,15 @@ def read_array_range(name: str, start: int, count: int) -> List[float]:
 def read_string(name: str, max_len: int = 260) -> str:
     handle = dr(name)
     if handle is None:
+        log_debug(f"read_string({name!r}): dataref not found")
         return ""
-    buf = bytearray(max_len)
     try:
-        xp.getDatab(handle, buf, 0, max_len)
-    except Exception:
+        val = xp.getDatas(handle, count=max_len)
+        log_debug(f"read_string({name!r}): {val!r}")
+        return val
+    except Exception as e:
+        log_debug(f"read_string({name!r}): exception {e}")
         return ""
-    return buf.rstrip(b"\x00").decode("utf-8", errors="ignore")
 
 def encode_angle32(deg: float) -> int:
     return int(deg * (65536.0 * 65536.0) / 360.0) & 0xFFFFFFFF
@@ -1237,6 +1239,71 @@ def update_snapshot() -> None:
     _write_u16(0x0EF0, int(surface_speed_knots + 0.5))
     _write_u16(0x0EF2, surface_dir_u16)
 
+    # ---- Aircraft identification strings ----
+    # FSUIPC offset definitions (from Pete Dowson FSUIPC SDK):
+    #   0x3C00 (256 bytes) - Air file path (path to aircraft .air/.cfg file)
+    #   0x3D00 (256 bytes) - Aircraft title (from title= in aircraft.cfg)
+    #   0x3E00 (256 bytes) - Flight simulator install path
+    #   0x3500 (24 bytes)  - ATC model (e.g. "A320", "A20N")
+    #   0x3148 (24 bytes)  - ATC airline name (e.g. "British Airways")
+    #   0x313C (12 bytes)  - ATC ID / tail number (e.g. "G-EUYO")
+    #   0x3160 (24 bytes)  - ATC type / manufacturer (e.g. "Airbus")
+    acf_icao = read_string("sim/aircraft/view/acf_ICAO", 40)
+    acf_descrip = read_string("sim/aircraft/view/acf_descrip", 260)
+    acf_tailnum = read_string("sim/aircraft/view/acf_tailnum", 40)
+    acf_livery = read_string("sim/aircraft/view/acf_livery_path", 260)
+    acf_path = read_string("sim/aircraft/view/acf_relative_path", 260)
+
+    # Build aircraft title for FSUIPC consumers (offset 0x3D00).
+    # BAVirtual Merlin matches X-Plane aircraft by folder name + livery name in the title.
+    # Expected format: "<FolderName> <LiveryName>"
+    # e.g. "ToLissA320N British Airways G-TTNL"
+    # The livery name is extracted from acf_livery_path:
+    #   "Aircraft/ToLissA320N/liveries/British Airways (G-TTND)/" -> "British Airways (G-TTND)"
+    # The folder name is extracted from acf_path:
+    #   "Aircraft/ToLissA320N/a320.acf" -> "ToLissA320N"
+
+    # Extract aircraft folder name from path
+    acf_folder = ""
+    if acf_path:
+        parts = acf_path.replace("\\", "/").split("/")
+        if len(parts) >= 2:
+            acf_folder = parts[-2]  # e.g. "ToLissA320N"
+
+    # Extract livery name from livery path
+    livery_name = ""
+    if acf_livery:
+        lparts = acf_livery.replace("\\", "/").rstrip("/").split("/")
+        if lparts:
+            livery_name = lparts[-1]  # e.g. "British Airways (G-TTND)"
+
+    # Build title: "<folder> <livery>" matching BAVirtual's expected format
+    if acf_folder and livery_name:
+        acf_title = f"{acf_folder} {livery_name}"
+    elif acf_folder:
+        acf_title = f"{acf_folder} {acf_descrip}"
+    else:
+        acf_title = f"{acf_descrip} {acf_tailnum}".strip()
+
+    # 0x3C00: Air file path (256 bytes)
+    write_ascii(0x3C00, acf_path if acf_path else acf_descrip, 256)
+    # 0x3D00: Aircraft title (256 bytes) - the key field for airframe matching
+    write_ascii(0x3D00, acf_title, 256)
+    # 0x3E00: Simulator install path (256 bytes)
+    # XPUIPC on Windows populates this with the X-Plane directory path.
+    xplane_path = read_string("sim/system/directory_path", 256)
+    write_ascii(0x3E00, xplane_path, 256)
+    # 0x3500: ATC model (24 bytes) - ICAO type designator
+    write_ascii(0x3500, acf_icao, 24)
+    # 0x3148: ATC airline name (24 bytes) - extract from livery name
+    write_ascii(0x3148, livery_name.split("(")[0].strip() if livery_name else "", 24)
+    # 0x313C: ATC ID / tail number (12 bytes)
+    write_ascii(0x313C, acf_tailnum, 12)
+    # 0x3160: ATC type / manufacturer name (24 bytes)
+    write_ascii(0x3160, acf_folder if acf_folder else acf_icao, 24)
+
+    log_verbose(f"AIRCRAFT icao={acf_icao!r} title={acf_title!r} folder={acf_folder!r} livery={livery_name!r}")
+
 # parse FS6IPC block
 
 def parse_ipc_block(data: bytearray) -> bytearray:
@@ -1259,6 +1326,11 @@ def parse_ipc_block(data: bytearray) -> bytearray:
             if payload + nBytes > end:
                 raise ValueError("READ payload truncated")
             data[payload:payload+nBytes] = mem[dwOffset:dwOffset+nBytes]
+            # Log what we return for aircraft identification offsets
+            if dwOffset in (0x3C00, 0x3D00, 0x3E00, 0x3500, 0x3148, 0x313C, 0x3160):
+                raw = mem[dwOffset:dwOffset+nBytes]
+                text = raw.rstrip(b"\x00").decode("utf-8", errors="ignore")
+                log_debug(f"  IPC READ 0x{dwOffset:04X} ({nBytes}b) -> {text!r}")
             pos = payload + nBytes
         elif cmd == FS6IPC_WRITESTATEDATA_ID:
             if pos + 12 > end:
